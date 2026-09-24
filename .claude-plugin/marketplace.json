@@ -1,0 +1,13 @@
+{
+  "name": "claude-voiceover",
+  "owner": { "name": "Ranjit Jana" },
+  "description": "Local, key-free voice-over for Claude Code responses.",
+  "plugins": [
+    {
+      "name": "claude-voiceover",
+      "source": "./",
+      "description": "Reads Claude's final response aloud, with per-session on/off and a macOS menu bar app.",
+      "version": "0.1.0"
+    }
+  ]
+}
