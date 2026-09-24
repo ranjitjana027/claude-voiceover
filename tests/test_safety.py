@@ -204,3 +204,180 @@ def test_launcher_kill_switch(tmp_path, monkeypatch):
     result = run_launcher(tmp_path, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                      "prompt": "/voiceover off"})
     assert result.stdout == ""
+
+
+# ---------- 0.2.1 security review ----------
+
+@pytest.mark.parametrize("text, spoken", [
+    ("hi [[volm 0]] there", "hi there"),
+    ("a [[rate 700]]b", "a b"),
+    ("open [[inpt PHON", "open [ [inpt PHON"),
+    ("x [[[ y", "x [ [ [ y"),
+    ("[[[[volm 0]]]]", "]]"),
+    ("list[[1,2],[3]]", "list[ [1,2],[3]]"),  # nested list: one space, sounds the same
+])
+def test_speech_engine_commands_are_stripped(text, spoken):
+    assert voiceover.clean_for_speech(text) == spoken
+
+
+@pytest.mark.parametrize("text", ["a[0][1]", "m[i][j] = 1", "see [1] and [2]"])
+def test_ordinary_brackets_are_spoken_unchanged(text):
+    assert voiceover.clean_for_speech(text) == text
+
+
+def test_state_files_are_private_and_temp_names_are_not_followed(tmp_path):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("keep")
+    os.symlink(sentinel, f"{common.CONFIG_PATH}.{os.getpid()}.tmp")  # the pre-0.2.1 temp name
+    common.save_config(common.load_config())
+    assert sentinel.read_text() == "keep"
+    assert stat.S_IMODE(os.stat(common.CONFIG_PATH).st_mode) == 0o600
+    assert json.load(open(common.CONFIG_PATH))["rate"] == common.DEFAULTS["rate"]
+    assert not list(tmp_path.glob(".*.tmp")), "no temp file left behind"
+
+
+def test_lock_file_symlink_is_not_followed(tmp_path):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("keep")
+    os.symlink(sentinel, os.path.join(common.DATA_DIR, "sessions.lock"))
+    with pytest.raises(common.LockUnsafe, match="is a symlink; delete it"):
+        with common.file_lock("sessions.lock"):
+            pass
+    assert sentinel.read_text() == "keep"
+
+
+def test_symlinked_sessions_lock_still_speaks_with_global_default(tmp_path, monkeypatch, capsys):
+    spoken = []
+    monkeypatch.setattr(voiceover, "speak", lambda text, config, session_id=None: spoken.append(text))
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "sessions.lock"))
+    run_hook(monkeypatch, capsys, {"hook_event_name": "Stop", "session_id": "A", "last_assistant_message": "hello"})
+    assert spoken == ["hello"]
+    assert "is a symlink" in open(common.LOG_PATH).read()
+
+
+def test_symlinked_setup_lock_gives_an_actionable_reply(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "setup.lock"))
+    reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                           "prompt": "/voiceover-setup"})
+    assert reply["stopReason"].startswith("Setup can't start:") and "delete it" in reply["stopReason"]
+
+
+def test_lock_file_is_private():
+    with common.file_lock("x.lock"):
+        pass
+    assert stat.S_IMODE(os.stat(os.path.join(common.DATA_DIR, "x.lock")).st_mode) == 0o600
+
+
+def test_symlinked_speaker_lock_skips_speech_without_raising(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setitem(sys.modules, "pyttsx3", type(sys)("pyttsx3"))
+    sys.modules["pyttsx3"].init = lambda: calls.append("init")
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
+    voiceover.speak("hi", common.load_config(), "A")
+    assert calls == []
+    log = open(common.LOG_PATH).read()
+    assert "not speaking" in log and "is a symlink" in log
+
+
+def test_setup_reports_symlinked_lock_not_already_running(tmp_path, monkeypatch, capsys):
+    import setup
+    installs = []
+    monkeypatch.setattr(setup, "install", lambda: installs.append(1))
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "setup.lock"))
+    with pytest.raises(SystemExit):
+        setup.main()
+    out = capsys.readouterr().out
+    assert "is a symlink" in out and "already running" not in out and installs == []
+
+
+def test_setup_installs_pinned_packages_without_upgrading(monkeypatch):
+    import setup
+    calls = []
+    monkeypatch.setattr(setup, "run", lambda *cmd: calls.append(cmd))
+    setup.install()
+    (pip,) = [c for c in calls if "pip" in c]
+    assert pip == (common.VENV_PYTHON, "-m", "pip", "install", "--quiet", *setup.PACKAGES)
+
+
+def test_failed_state_write_keeps_old_file_and_leaves_no_temp(tmp_path):
+    common.save_config(common.load_config())
+    before = open(common.CONFIG_PATH).read()
+    with pytest.raises(TypeError):
+        common.write_json_atomic(common.CONFIG_PATH, {"x": object()})
+    assert open(common.CONFIG_PATH).read() == before
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_status_warns_when_speaker_lock_is_broken(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
+    reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                           "prompt": "/voiceover status"})
+    assert "Nothing will be spoken until this is fixed" in reply["stopReason"]
+    assert "speaker.lock is a symlink" in reply["stopReason"]
+
+
+@pytest.fixture
+def menubar_module(monkeypatch):
+    """menubar.py with stand-ins for AppKit/rumps, which only exist on a Mac with setup done."""
+    alerts = []
+    rumps = type(sys)("rumps")
+    rumps.App, rumps.MenuItem = object, object
+    rumps.timer = lambda seconds: (lambda f: f)
+    rumps.alert = lambda title, message: alerts.append(message)
+    monkeypatch.setitem(sys.modules, "rumps", rumps)
+    monkeypatch.setitem(sys.modules, "AppKit", type(sys)("AppKit"))
+    monkeypatch.delitem(sys.modules, "menubar", raising=False)
+    import menubar
+    yield menubar, alerts
+    sys.modules.pop("menubar", None)  # don't leave the stub-bound module for later imports
+
+
+def test_menubar_session_actions_alert_on_lock_problems(menubar_module):
+    menubar, alerts = menubar_module
+
+    def unsafe(_):
+        raise common.LockUnsafe("/x/sessions.lock is a symlink; delete it and try again")
+
+    def busy(_):
+        raise common.LockTimeout("sessions.lock")
+    menubar.lock_guarded(unsafe)(None)
+    menubar.lock_guarded(busy)(None)
+    assert alerts == ["/x/sessions.lock is a symlink; delete it and try again",
+                      "Sessions are busy right now; try again in a moment."]
+
+
+@pytest.mark.parametrize("error, message", [
+    (common.LockUnsafe("/x/sessions.lock is a symlink; delete it and try again"),
+     "/x/sessions.lock is a symlink; delete it and try again"),
+    (common.LockTimeout("sessions.lock"), "Sessions are busy right now; try again in a moment."),
+])
+def test_menubar_session_actions_are_guarded(menubar_module, monkeypatch, error, message):
+    menubar, alerts = menubar_module
+    from contextlib import contextmanager
+
+    @contextmanager
+    def broken():
+        raise error
+        yield
+    monkeypatch.setattr(common, "sessions_locked", broken)
+    app = object.__new__(menubar.VoiceoverMenuBar)  # rumps.App is a stub, so skip __init__
+    app.rebuild_sessions_menu = lambda force=False: None
+    app.reset_sessions(None)
+    app.forget_sessions(None)
+    app._session_toggler("A")(None)
+    assert alerts == [message] * 3
+
+
+def test_symlinked_sessions_lock_is_logged_during_bookkeeping(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "sessions.lock"))
+    assert run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                          "prompt": "hello"}) is None
+    log = open(common.LOG_PATH).read()
+    assert "session bookkeeping skipped" in log and "is a symlink" in log
+
+
+def test_no_speaker_warning_when_voiceover_is_off(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
+    reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                           "prompt": "/voiceover off"})
+    assert reply["stopReason"] == "Voice-over is OFF for this session."

@@ -79,6 +79,10 @@ def clean_for_speech(text, max_chars=common.DEFAULTS["max_chars"], announce_code
     text = re.sub(r"(\*{1,2})(?=\S)([^*\n]{1,300}?)(?<=\S)\1", r"\2", text)     # *em* / **bold**
     text = re.sub(r"(?<!\w)(_{1,2})(?=\S)([^_\n]{1,300}?)(?<=\S)\1(?!\w)", r"\2", text)  # _em_, keeps snake_case
     text = re.sub(r"[~>]", "", text)                                            # strikethrough/quotes
+    # macOS speech may treat [[...]] as engine commands ([[volm 0]], [[rate 700]]); a response
+    # quoting untrusted content must not be able to mute or garble the voice.
+    text = re.sub(r"\[\[[^\]\n]{0,100}\]\]", " ", text)
+    text = re.sub(r"\[(?=\[)", "[ ", text)                                        # stray [[ can't open one
     text = re.sub(r"\s+", " ", text).strip()
     if max_chars and len(text) > max_chars:
         text = text[:max_chars].rsplit(" ", 1)[0] + ". Response truncated."
@@ -91,7 +95,11 @@ def speak(text, config, session_id=None):
     except ImportError:
         common.log("pyttsx3 missing; run /voiceover-setup")
         return
-    common.claim_speaker(session_id)  # one voice at a time across all sessions
+    try:
+        common.claim_speaker(session_id)  # one voice at a time across all sessions
+    except common.LockTimeout as error:
+        common.log(f"not speaking: {error}")
+        return
     try:
         engine = pyttsx3.init()
         engine.setProperty("rate", config["rate"])
@@ -132,7 +140,9 @@ def voiceover_command(args, session_id, config):
     if not on:
         common.stop_speaker(session_id)
     note = " (following the global default)" if following_default else ""
-    return f"Voice-over is {'ON' if on else 'OFF'} for this session{note}."
+    problem = common.speaker_lock_problem() if on else None
+    warning = f" Nothing will be spoken until this is fixed: {problem}" if problem else ""
+    return f"Voice-over is {'ON' if on else 'OFF'} for this session{note}.{warning}"
 
 
 def setup_command(args):
@@ -147,6 +157,8 @@ def setup_command(args):
     try:
         with common.file_lock("setup.lock", timeout=0):
             pass
+    except common.LockUnsafe as error:
+        return f"Setup can't start: {error}"
     except common.LockTimeout:
         return "Setup is already running. Check progress with /voiceover-setup status."
     # pip install takes ~1 min, longer than UserPromptSubmit may block, so run detached;
@@ -204,8 +216,8 @@ def on_stop(data):
             with common.sessions_locked() as sessions:
                 enabled = common.session_enabled(
                     common.touch_session(sessions, session_id, data.get("cwd")), config)
-        except common.LockTimeout:
-            common.log("sessions lock busy; using the global default")
+        except common.LockTimeout as error:
+            common.log(f"sessions lock unavailable ({error}); using the global default")
     if not enabled:
         return
 
@@ -231,6 +243,8 @@ def on_user_prompt(data):
         try:
             with common.sessions_locked() as sessions:
                 common.touch_session(sessions, session_id, data.get("cwd"))
+        except common.LockUnsafe as error:
+            common.log(f"session bookkeeping skipped: {error}")
         except common.LockTimeout:
             pass  # bookkeeping only; never delay the user's prompt for it
 

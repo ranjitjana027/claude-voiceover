@@ -15,15 +15,24 @@ item as persistence. They can still run the app any time with `/voiceover-menuba
 
 ## 2. Get the installer
 
-Use an existing local clone if the user has one (for example `~/Documents/claude-voiceover`). Otherwise clone it:
+Use an existing local clone if the user has one in their own folders (for example `~/Documents/claude-voiceover`).
+Otherwise, clone it into a fresh private temp directory with this single command. It falls back to `gh` if
+`git clone` fails, and prints the clone path only on success:
 
 ```bash
-git clone --depth 1 https://github.com/ranjitjana027/claude-voiceover "${TMPDIR:-/tmp}/claude-voiceover"
+TMP="$(mktemp -d)" && CLONE="$TMP/claude-voiceover" &&
+{ git clone --depth 1 https://github.com/ranjitjana027/claude-voiceover "$CLONE" ||
+  gh repo clone ranjitjana027/claude-voiceover "$CLONE" -- --depth 1; } && echo "$CLONE" ||
+  { [ -n "$TMP" ] && rm -rf "$TMP"; echo "clone failed" >&2; false; }
 ```
 
-The repository may be private. If the clone fails with an auth error, try
-`gh repo clone ranjitjana027/claude-voiceover "${TMPDIR:-/tmp}/claude-voiceover" -- --depth 1`. If that fails too,
-tell the user they need read access to the repo, and stop.
+Shell variables may not survive between your commands, so use the printed path as `<clone>` from here on.
+
+Never run the installer from a directory that already existed under `/tmp` or `$TMPDIR` (such as
+`/tmp/claude-voiceover`): on a shared machine anyone can create one there. Always clone into a new `mktemp -d`.
+
+If it prints `clone failed`: with an auth error, the repository is private and the user needs read access to it;
+otherwise (for example `gh: command not found` or a network error) tell the user what the error said, and stop.
 
 ## 3. Run it
 
@@ -48,13 +57,29 @@ remove them. If the user agrees, re-run with the flag:
 sh <clone>/scripts/install.sh --remove-legacy [--menubar]
 ```
 
-This moves the listed files into `~/.claude/voiceover/legacy-backup-<timestamp>/` (nothing is deleted) and unloads
-the old login item. From the settings files it removes only the hooks that run `claude_speak.py` or
-`claude_speak_menubar.py`. Each edited settings file is backed up first as `*.bak-voiceover`.
+This moves the listed files into a private `legacy-backup-<timestamp>/` folder (the output names it; by default
+under `~/.claude/voiceover/`) and unloads the old login item. From the settings files it removes only the hooks
+that run `claude_speak.py` or `claude_speak_menubar.py`. Each edited settings file is first backed up next to
+itself as `<file>.bak-voiceover` (or `<file>.bak-voiceover.<random>` if that name is taken by something else);
+the output gives each backup's path. A symlinked `~/.claude/settings*.json` is edited at its real file, and its
+backup is written next to that file.
 
-A project's shared `.claude/settings.json` is usually committed to git, so it is **never edited**. If it has
-legacy hooks, the output lists it under "Shared project settings". Tell the user, and offer to remove those
-hooks by hand only if they ask.
+Some items need the user rather than a re-run. Tell the user about each of these sections if it appears, and
+offer to help by hand only if they ask:
+
+- **Settings not edited automatically**: these settings files still have legacy hooks, but are never edited: a
+  project's shared `.claude/settings.json` (usually committed to git), a project `settings.local.json` that is a
+  symlink or sits in a symlinked `.claude` directory, a file that can't be written, one that isn't valid UTF-8
+  (rewriting it would destroy those bytes), or one whose rewrite failed. The user removes the `claude_speak`
+  hooks by hand. Until then the old `claude_speak*.py` scripts stay in place ("Will be left in place", or "Left
+  in place" after `--remove-legacy`) so those hooks keep working; once they are gone, re-running with
+  `--remove-legacy` moves the scripts too.
+- **Could not move**: the file is still in place (the line gives the error); the user moves or deletes it by
+  hand. If the old login item is listed here, `claude_speak_menubar.py` stays too, because it still runs it.
+- **Could not read**: a settings file that is broken JSON, not a regular file, over 4 MB or too deeply nested
+  to check. It may still hold legacy hooks; the user should look at it.
+- **Legacy check stopped early**: an unexpected error; only the listed items were handled. Report the error
+  line to the user. The plugin itself is installed either way.
 
 ## 5. Finish
 
@@ -66,8 +91,8 @@ Tell the user:
    - `/voiceover global on|off`: default for all sessions
    - `/voiceover-menubar enable|disable|start|stop|status`: macOS menu bar app
 
-If you cloned into the temp directory, delete the clone afterwards. The plugin runs from Claude Code's
-plugin cache, not from the clone.
+If you cloned into a temp directory, delete it afterwards with `rm -rf "$(dirname <clone>)"`. The plugin runs
+from Claude Code's plugin cache, not from the clone.
 
 ## Troubleshooting
 

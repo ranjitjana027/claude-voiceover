@@ -18,10 +18,14 @@ for leftovers. Then restart Claude Code.
 
 **By hand, with one command:**
 
+Run it from your project folder: the installer checks that project's `.claude` settings for a legacy setup.
+
 ```bash
-git clone https://github.com/ranjitjana027/claude-voiceover && sh claude-voiceover/scripts/install.sh
+CLONE="$(mktemp -d)/claude-voiceover" && git clone --depth 1 https://github.com/ranjitjana027/claude-voiceover "$CLONE" && sh "$CLONE/scripts/install.sh"
 # add --menubar to start the menu bar app at login (not recommended on company-managed Macs)
 ```
+
+The plugin runs from Claude Code's plugin cache, so you can delete the clone afterwards: `rm -rf "$(dirname "$CLONE")"`.
 
 Then restart Claude Code.
 
@@ -104,7 +108,9 @@ Everything lives in `~/.claude/voiceover/`, which plugin updates don't touch:
 | `legacy-backup-*/` | Files moved aside by `install.sh --remove-legacy` |
 | `setup.log`, `voiceover.log`, `menubar.log` | Diagnostics, capped at 256 KB each; voice-over never raises errors into Claude Code |
 
-The folder is private (`700`) because `sessions.json` lists your project paths.
+The folder is private (`700`) because `sessions.json` lists your project paths. `--remove-legacy` also leaves a
+`<settings file>.bak-voiceover` backup next to each settings file it edits (next to the real file if the settings
+file is a symlink), or `<settings file>.bak-voiceover.<random>` if that name is already taken by something else.
 
 ## Safety
 

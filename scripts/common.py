@@ -4,10 +4,12 @@ Standard library only: the hook must run before /voiceover-setup has installed a
 State lives outside the plugin directory because Claude Code replaces that
 directory on every plugin update.
 """
+import errno
 import json
 import os
 import signal
 import subprocess
+import tempfile
 import time
 from contextlib import contextmanager
 
@@ -16,7 +18,7 @@ try:
 except ImportError:  # Windows: unsupported; voiceover.main() exits before anything needs it
     fcntl = None
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DATA_DIR = os.path.expanduser(os.environ.get("CLAUDE_VOICEOVER_HOME", "~/.claude/voiceover"))
 VENV_PYTHON = os.path.join(DATA_DIR, "venv", "bin", "python")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
@@ -49,23 +51,45 @@ class LockTimeout(Exception):
     pass
 
 
+class LockUnsafe(LockTimeout):
+    """Raised when the lock path is a symlink. A LockTimeout subclass, so callers that fall back
+    on a busy lock fall back here too; the message says how to fix it."""
+
+
 def ensure_data_dir():
     os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)  # sessions.json lists project paths
 
 
 def write_json_atomic(path, value):
     ensure_data_dir()
-    tmp_path = f"{path}.{os.getpid()}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(value, f, indent=2)
-    os.replace(tmp_path, path)  # readers never see half a file
+    # mkstemp: a fresh 0600 file (O_EXCL), never a symlink someone left at a guessable name;
+    # after the replace the file at path is 0600 (sessions.json lists project paths)
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, indent=2)
+        os.replace(tmp_path, path)  # readers never see half a file
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 @contextmanager
 def file_lock(name, timeout=None):
-    """Exclusive advisory lock on <data dir>/<name>; raises LockTimeout instead of hanging."""
+    """Exclusive advisory lock on <data dir>/<name>; raises LockTimeout instead of hanging,
+    or LockUnsafe if the lock path is a symlink (never opened through it)."""
     ensure_data_dir()
-    with open(os.path.join(DATA_DIR, name), "w") as lock:
+    path = os.path.join(DATA_DIR, name)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise LockUnsafe(f"{path} is a symlink; delete it and try again") from None
+        raise
+    with os.fdopen(fd, "r+") as lock:
         deadline = time.monotonic() + (LOCK_TIMEOUT_SECONDS if timeout is None else timeout)
         while True:
             try:
@@ -218,6 +242,12 @@ def stop_speaker(session_id=None):
         return
     if session_id is None or info.get("session_id") == session_id:
         terminate(info)
+
+
+def speaker_lock_problem():
+    """Why speaking is impossible right now (a symlinked speaker.lock), or None."""
+    path = os.path.join(DATA_DIR, "speaker.lock")
+    return f"{path} is a symlink; delete it and try again" if os.path.islink(path) else None
 
 
 def claim_speaker(session_id):

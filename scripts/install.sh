@@ -84,10 +84,11 @@ import menubar_ctl; print(menubar_ctl.command('enable'))"
 fi
 
 say "Legacy setup check"
+# Optional cleanup: if it fails (only Ctrl-C should), the plugin itself is still installed.
 if [ "$REMOVE_LEGACY" = 1 ]; then
-  "$PYTHON" "$ROOT/scripts/legacy.py" --remove --project "$PWD"
+  "$PYTHON" "$ROOT/scripts/legacy.py" --remove --project "$PWD" || echo "WARNING: legacy check did not finish (see above)"
 else
-  "$PYTHON" "$ROOT/scripts/legacy.py" --project "$PWD"
+  "$PYTHON" "$ROOT/scripts/legacy.py" --project "$PWD" || echo "WARNING: legacy check did not finish (see above)"
 fi
 
 say "Done"

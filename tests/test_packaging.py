@@ -54,3 +54,16 @@ def test_manifest_versions_match():
     with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json"), encoding="utf-8") as f:
         listed = {p["name"]: p for p in json.load(f)["plugins"]}
     assert listed[plugin["name"]]["version"] == plugin["version"]
+
+
+def test_dependencies_are_pinned():
+    import setup
+    assert setup.PACKAGES and all(re.fullmatch(r"[\w.-]+==[\w.]+", p) for p in setup.PACKAGES)
+
+
+def test_install_guide_clones_into_a_fresh_temp_dir():
+    with open(os.path.join(ROOT, "INSTALL.md"), encoding="utf-8") as f:
+        guide = f.read()
+    assert 'TMP="$(mktemp -d)" &&' in guide and '[ -n "$TMP" ] && rm -rf "$TMP"' in guide
+    assert "gh repo clone" in guide
+    assert "${TMPDIR:-/tmp}/claude-voiceover" not in guide
