@@ -85,7 +85,7 @@ def test_command_regex_ignores_other_prompts(text):
 
 def test_session_off_mutes_only_that_session(monkeypatch, capsys, spoken):
     reply = run_hook(monkeypatch, capsys, prompt("A", "/voiceover off"))
-    assert reply == {"decision": "block", "reason": "Voice-over is OFF for this session (this session's setting)."}
+    assert reply["continue"] is False and reply["stopReason"] == reply["reason"] == "Voice-over is OFF for this session."
     run_hook(monkeypatch, capsys, stop("A", "muted"))
     run_hook(monkeypatch, capsys, stop("B", "B talks"))
     assert spoken == [("B talks", "B")]
@@ -95,7 +95,7 @@ def test_toggle_default_and_status(monkeypatch, capsys, spoken):
     assert "ON" in run_hook(monkeypatch, capsys, prompt("A", "/voiceover status"))["reason"]
     assert "OFF" in run_hook(monkeypatch, capsys, prompt("A", "/voiceover toggle"))["reason"]
     reply = run_hook(monkeypatch, capsys, prompt("A", "/voiceover default"))["reason"]
-    assert reply == "Voice-over is ON for this session (global default)."
+    assert reply == "Voice-over is ON for this session (following the global default)."
 
 
 def test_global_default_applies_to_sessions_without_override(monkeypatch, capsys, spoken):
@@ -181,3 +181,10 @@ def test_env_kill_switch(monkeypatch, capsys, spoken):
     assert run_hook(monkeypatch, capsys, prompt("A", "/voiceover off")) is None
     run_hook(monkeypatch, capsys, stop("A", "x"))
     assert spoken == []
+
+
+def test_command_reply_ends_turn_without_block_wrapper(monkeypatch, capsys, spoken):
+    reply = run_hook(monkeypatch, capsys, prompt("A", "/claude-voiceover:voiceover on"))
+    assert reply["continue"] is False  # the prompt never reaches the model
+    assert reply["stopReason"] == "Voice-over is ON for this session."
+    assert reply["suppressOriginalPrompt"] is True  # fallback path: don't echo the prompt
