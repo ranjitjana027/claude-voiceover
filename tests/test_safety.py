@@ -328,7 +328,8 @@ def menubar_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "AppKit", type(sys)("AppKit"))
     monkeypatch.delitem(sys.modules, "menubar", raising=False)
     import menubar
-    return menubar, alerts
+    yield menubar, alerts
+    sys.modules.pop("menubar", None)  # don't leave the stub-bound module for later imports
 
 
 def test_menubar_session_actions_alert_on_lock_problems(menubar_module):
@@ -343,3 +344,40 @@ def test_menubar_session_actions_alert_on_lock_problems(menubar_module):
     menubar.lock_guarded(busy)(None)
     assert alerts == ["/x/sessions.lock is a symlink; delete it and try again",
                       "Sessions are busy right now; try again in a moment."]
+
+
+@pytest.mark.parametrize("error, message", [
+    (common.LockUnsafe("/x/sessions.lock is a symlink; delete it and try again"),
+     "/x/sessions.lock is a symlink; delete it and try again"),
+    (common.LockTimeout("sessions.lock"), "Sessions are busy right now; try again in a moment."),
+])
+def test_menubar_session_actions_are_guarded(menubar_module, monkeypatch, error, message):
+    menubar, alerts = menubar_module
+    from contextlib import contextmanager
+
+    @contextmanager
+    def broken():
+        raise error
+        yield
+    monkeypatch.setattr(common, "sessions_locked", broken)
+    app = object.__new__(menubar.VoiceoverMenuBar)  # rumps.App is a stub, so skip __init__
+    app.rebuild_sessions_menu = lambda force=False: None
+    app.reset_sessions(None)
+    app.forget_sessions(None)
+    app._session_toggler("A")(None)
+    assert alerts == [message] * 3
+
+
+def test_symlinked_sessions_lock_is_logged_during_bookkeeping(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "sessions.lock"))
+    assert run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                          "prompt": "hello"}) is None
+    log = open(common.LOG_PATH).read()
+    assert "session bookkeeping skipped" in log and "is a symlink" in log
+
+
+def test_no_speaker_warning_when_voiceover_is_off(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
+    reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                           "prompt": "/voiceover off"})
+    assert reply["stopReason"] == "Voice-over is OFF for this session."

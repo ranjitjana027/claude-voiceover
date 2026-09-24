@@ -6,18 +6,22 @@
 Left in place, it speaks every response a second time. Removal is conservative:
   - only hooks whose command runs claude_speak.py / claude_speak_menubar.py are removed
   - files are moved into a timestamped backup folder, never deleted
-  - every edited settings file is backed up next to itself first (replacing a backup from an
-    earlier run) and rewritten atomically; a symlinked user settings file (dotfiles) is edited
-    at its real path, keeping the link
+  - every edited settings file is copied next to itself first and rewritten atomically; the copy
+    becomes <file>.bak-voiceover (replacing an earlier run's) only once the rewrite succeeded,
+    so a failure never costs the previous backup; a symlinked user settings file (dotfiles) is
+    edited at its real path, keeping the link
   - a project's shared .claude/settings.json (usually committed) is only reported, never edited
   - so is a project settings.local.json that is not a plain file at <project>/.claude (it, or
     .claude itself, is a symlink): a cloned repo could point it at any file of the user's
-  - so is any settings file we can't write (e.g. a dotfiles link into a read-only store)
+  - so is any settings file we can't write (e.g. a dotfiles link into a read-only store), and
+    one that isn't valid UTF-8: Claude Code still loads it (bad bytes become U+FFFD), but
+    rewriting it would destroy those bytes
   - temp and backup files are created fresh (O_EXCL/O_NOFOLLOW), never through a planted link
   - while any report-only file still runs claude_speak*.py, both scripts stay in place (the
     rest is still moved), so the remaining hooks keep working instead of failing on every event
-  - a failure on one settings file is reported and the rest carry on; exit status stays 0,
-    because legacy cleanup is optional and must not abort the installer
+  - a failure on one settings file or legacy file is reported and the rest carry on; the
+    summary always prints and exit status stays 0, because legacy cleanup is optional and must
+    not abort the installer
 """
 import argparse
 import json
@@ -124,38 +128,69 @@ def write_json_atomic(path, data):
 
 
 def backup(path):
-    """Copy path to path.bak-voiceover, or path.bak-voiceover.<random> if something other than
-    a regular file holds that name; never writes through a symlink. Returns the backup path."""
-    target = path + ".bak-voiceover"
-    if os.path.isfile(target) and not os.path.islink(target):
-        os.remove(target)  # normally our backup from an earlier run; replace it
+    """Copy path to a fresh <file>.bak-voiceover.<random> next to it (O_EXCL, never through a
+    symlink) and return that name; removes the partial copy if copying fails."""
+    fd, staged = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(path) + ".bak-voiceover.")
     try:
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    except FileExistsError:  # something other than a regular file is there: don't touch it
-        fd, target = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(target) + ".")
-    with open(path, "rb") as src, os.fdopen(fd, "wb") as dst:
-        shutil.copyfileobj(src, dst)
-    shutil.copymode(path, target)
+        with open(path, "rb") as src, os.fdopen(fd, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        shutil.copymode(path, staged)
+    except BaseException:
+        _remove_quietly(staged)
+        raise
+    return staged
+
+
+def promote_backup(staged, path):
+    """Rename the staged copy to path.bak-voiceover and return the final name. If something
+    other than a regular file holds that name (a planted link, a folder), leave it alone and
+    keep the staged name."""
+    target = path + ".bak-voiceover"
+    if os.path.lexists(target) and not (os.path.isfile(target) and not os.path.islink(target)):
+        return staged
+    try:
+        os.replace(staged, target)  # rename replaces a link itself, never what it points at
+    except OSError:
+        return staged
     return target
+
+
+def _remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def writable(path):
     return os.access(path, os.W_OK) and os.access(os.path.dirname(path), os.W_OK)
 
 
+def read_settings(path):
+    """(data, note). note is set for a file that isn't valid UTF-8, parsed the way Claude Code
+    does (bad bytes become U+FFFD) so its hooks are still seen, but not safe to rewrite.
+    An empty file is data None. Raises OSError / ValueError when it can't be parsed at all."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    if not raw.strip():
+        return None, None
+    try:
+        return json.loads(raw.decode("utf-8-sig")), None
+    except UnicodeDecodeError:
+        return json.loads(raw.decode("utf-8-sig", errors="replace")), "not valid UTF-8"
+
+
 def remove_hooks(path, data):
-    """Back up path, then rewrite it with data. Returns the backup path; on failure removes
-    the new backup and re-raises, so the file is either fully updated or untouched."""
-    saved = backup(path)
+    """Back up path, then rewrite it with data (already stripped). Returns the backup's path.
+    On failure the new copy is removed and the error re-raised: the settings file and any
+    earlier backup are untouched."""
+    staged = backup(path)
     try:
         write_json_atomic(path, data)
     except BaseException:
-        try:
-            os.remove(saved)
-        except OSError:
-            pass
+        _remove_quietly(staged)
         raise
-    return saved
+    return promote_backup(staged, path)
 
 
 def main():
@@ -165,62 +200,72 @@ def main():
     args = parser.parse_args()
 
     backup_dir = os.path.join(DATA_DIR, "legacy-backup-" + time.strftime("%Y%m%d-%H%M%S"))
-    found, manual, kept, unreadable, moved = [], [], [], [], False
-
-    for path, editable in settings_files(args.project):
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError) as error:  # ValueError: bad JSON or bad UTF-8
-            unreadable.append(f"{path} ({error.__class__.__name__}: {error})")
-            continue
-        count = strip_legacy_hooks(data)
-        if not count:
-            continue
-        label = f"{path} ({count} hook{'s' if count > 1 else ''}"
-        if editable and not writable(path):
-            editable, label = False, label + "; not writable"
-        if editable and args.remove:
+    found, manual, kept, unreadable, failed = [], [], [], [], []
+    moved = False
+    try:
+        for path, editable in settings_files(args.project):
             try:
-                label += f"; backup: {remove_hooks(path, data)}"
+                data, note = read_settings(path)
+            except (OSError, ValueError) as error:  # Claude Code can't load it either
+                unreadable.append(f"{path} ({error.__class__.__name__}: {error})")
+                continue
+            count = strip_legacy_hooks(data)
+            if not count:
+                continue
+            label = f"{path} ({count} hook{'s' if count > 1 else ''}"
+            if editable and note:
+                editable, label = False, label + f"; {note}"
+            if editable and not writable(path):
+                editable, label = False, label + "; not writable"
+            if editable and args.remove:
+                try:
+                    label += f"; backup: {remove_hooks(path, data)}"
+                except (OSError, ValueError) as error:  # ValueError: e.g. a lone surrogate can't be written
+                    editable, label = False, label + f"; could not edit: {error}"
+            (found if editable else manual).append(label + ")")
+
+        for path in legacy_files():
+            if manual and LEGACY_HOOK.fullmatch(os.path.basename(path)):
+                kept.append(path)  # hooks we couldn't remove still run it; moving it would break them
+                continue
+            if not args.remove:
+                found.append(path)
+                continue
+            try:
+                if path.endswith(".plist"):
+                    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LEGACY_PLIST_LABEL}"],
+                                   capture_output=True)
+                os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
+                os.makedirs(backup_dir, mode=0o700, exist_ok=True)
+                shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
             except OSError as error:
-                editable, label = False, label + f"; could not edit: {error}"
-        (found if editable else manual).append(label + ")")
-
-    for path in legacy_files():
-        if manual and LEGACY_HOOK.fullmatch(os.path.basename(path)):
-            kept.append(path)  # hooks we couldn't remove still run it; moving it would break them
-            continue
-        found.append(path)
-        if args.remove:
-            if path.endswith(".plist"):
-                subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LEGACY_PLIST_LABEL}"],
-                               capture_output=True)
-            os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
-            os.makedirs(backup_dir, mode=0o700, exist_ok=True)
-            shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
+                failed.append(f"{path} (could not move: {error})")
+                continue
+            found.append(path)
             moved = True
+    finally:  # even after an unexpected error, say what was already changed
+        report(args.remove, backup_dir if moved else None, found, manual, kept, failed, unreadable)
 
-    if not (found or manual or unreadable):
+
+def report(removing, backup_dir, found, manual, kept, failed, unreadable):
+    def section(title, items):
+        if items:
+            print(title)
+            print("\n".join(f"  - {item}" for item in items))
+
+    if not (found or manual or kept or failed):
         print("none found")
-        return
-    if found:
-        if args.remove:
-            print(f"Removed legacy setup (files moved to {backup_dir}):" if moved else "Removed legacy setup:")
-        else:
-            print("LEGACY SETUP FOUND - every response would be spoken twice. Re-run with --remove-legacy:")
-        print("\n".join(f"  - {item}" for item in found))
-    if manual:
-        print("Shared, symlinked or unwritable settings (not edited automatically; "
-              "remove the claude_speak hooks by hand):")
-        print("\n".join(f"  - {item}" for item in manual))
-    if kept:
-        print(f"{'Left' if args.remove else 'Will be left'} in place because those hooks still run them "
-              "(re-run once the hooks are gone):")
-        print("\n".join(f"  - {item}" for item in kept))
-    if unreadable:
-        print("Could not read (skipped; check these by hand for claude_speak hooks):")
-        print("\n".join(f"  - {item}" for item in unreadable))
+    elif removing:
+        section(f"Removed legacy setup (files moved to {backup_dir}):" if backup_dir else "Removed legacy setup:",
+                found)
+    else:
+        section("LEGACY SETUP FOUND - every response would be spoken twice. Re-run with --remove-legacy:", found)
+    section("Shared, symlinked or unwritable settings (not edited automatically; "
+            "remove the claude_speak hooks by hand):", manual)
+    section(f"{'Left' if removing else 'Will be left'} in place because those hooks still run them "
+            "(re-run once the hooks are gone):", kept)
+    section("Could not move (still in place; move or delete by hand):", failed)
+    section("Could not read (Claude Code can't load these either; fix or delete them):", unreadable)
 
 
 if __name__ == "__main__":

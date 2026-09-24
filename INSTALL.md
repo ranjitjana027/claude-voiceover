@@ -32,7 +32,7 @@ Never run the installer from a directory that already existed under `/tmp` or `$
 `/tmp/claude-voiceover`): on a shared machine anyone can create one there. Always clone into a new `mktemp -d`.
 
 If it prints `clone failed`: with an auth error, the repository is private and the user needs read access to it;
-otherwise `gh` may simply not be installed. Tell the user what the error said, and stop.
+otherwise (for example `gh: command not found` or a network error) tell the user what the error said, and stop.
 
 ## 3. Run it
 
@@ -49,8 +49,9 @@ exactly as printed; don't try to work around it.
 
 ## 4. Legacy setup
 
-If the output says **LEGACY SETUP FOUND** or lists **Shared, symlinked or unwritable settings**, show the user the listed items and explain that they come from an
-earlier hand-rolled version of this tool. If left in place, every response is spoken twice. Ask whether to
+If the output says **LEGACY SETUP FOUND**, or lists **Shared, symlinked or unwritable settings**, **Could not
+move** or **Could not read**, show the user the listed items and explain that they come from an earlier
+hand-rolled version of this tool. If left in place, every response is spoken twice. Ask whether to
 remove them. If the user agrees, re-run with the flag:
 
 ```bash
@@ -60,15 +61,18 @@ sh <clone>/scripts/install.sh --remove-legacy [--menubar]
 This moves the listed files into a private `legacy-backup-<timestamp>/` folder (the output names it; by default
 under `~/.claude/voiceover/`) and unloads the old login item. From the settings files it removes only the hooks
 that run `claude_speak.py` or `claude_speak_menubar.py`. Each edited settings file is first backed up next to
-itself; the output gives each backup's path. A symlinked `~/.claude/settings.json` is edited at its real file,
-and its backup is written next to that file.
+itself as `<file>.bak-voiceover` (or `<file>.bak-voiceover.<random>` if that name is taken by something else);
+the output gives each backup's path. A symlinked `~/.claude/settings*.json` is edited at its real file, and its
+backup is written next to that file. Files it could not move are listed under "Could not move" and stay put.
 
 A project's shared `.claude/settings.json` is usually committed to git, so it is **never edited**; neither is a
-project `settings.local.json` that is a symlink or sits in a symlinked `.claude` directory, nor any settings file
-that can't be written. If one has legacy hooks, the output lists it under "Shared, symlinked or unwritable
-settings", and the old `claude_speak*.py` scripts stay in place ("Will be left in place", or "Left in place" after
-`--remove-legacy`) so those hooks keep working. Files it could not read are listed under "Could not read". Tell the user, and offer to remove those hooks by hand only if they ask; once they are gone,
-re-running with `--remove-legacy` moves the scripts too.
+project `settings.local.json` that is a symlink or sits in a symlinked `.claude` directory, a settings file that
+can't be written, or one that isn't valid UTF-8 (rewriting it would destroy those bytes). If one has legacy hooks,
+the output lists it under "Shared, symlinked or unwritable settings", and the old `claude_speak*.py` scripts stay
+in place ("Will be left in place", or "Left in place" after `--remove-legacy`) so those hooks keep working. Tell
+the user, and offer to remove those hooks by hand only if they ask; once they are gone, re-running with
+`--remove-legacy` moves the scripts too. Files under "Could not read" are broken JSON or unreadable, so Claude
+Code can't load them either; the user should fix or delete them.
 
 ## 5. Finish
 
