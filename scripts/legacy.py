@@ -6,10 +6,14 @@
 Left in place, it speaks every response a second time. Removal is conservative:
   - only hooks whose command runs claude_speak.py / claude_speak_menubar.py are removed
   - files are moved into a timestamped backup folder, never deleted
-  - every edited settings file is backed up first and rewritten atomically
+  - every edited settings file is backed up first and rewritten atomically; a symlinked
+    user settings file (dotfiles) is edited at its real path, keeping the link
   - a project's shared .claude/settings.json (usually committed) is only reported, never edited
-  - so is any settings file that is a symlink, and temp/backup files never follow symlinks,
-    so a cloned repo can't aim these writes at another file
+  - so is a project settings.local.json that resolves outside <project>/.claude: a cloned
+    repo could symlink it (or .claude itself) at any file of the user's
+  - temp and backup files are created fresh (O_EXCL/O_NOFOLLOW), never through a planted link
+  - while any report-only file still runs claude_speak*.py, those scripts stay in place, so
+    the remaining hooks keep working instead of failing on every event
 """
 import argparse
 import json
@@ -49,19 +53,24 @@ def _mentions_legacy(path):
 
 
 def settings_files(project):
-    """(path, editable) pairs; the shared project settings.json and any symlink are report-only.
+    """(path, editable) pairs, where path is the real file to read and rewrite.
 
-    A symlinked settings file (e.g. planted by a cloned repo) could point at any file of the
-    user's, so it is never rewritten or backed up."""
+    User settings are the user's own, so a symlink there (dotfiles) is followed. A project's
+    settings.local.json is editable only if it really lives in <project>/.claude; the shared
+    settings.json is always report-only."""
     user = [(os.path.join(HOME, ".claude", n), True) for n in ("settings.json", "settings.local.json")]
-    proj = [(os.path.join(project, ".claude", "settings.local.json"), True),
-            (os.path.join(project, ".claude", "settings.json"), False)] if project else []
+    proj = []
+    if project:
+        claude_dir = os.path.join(os.path.realpath(project), ".claude")
+        local = os.path.join(project, ".claude", "settings.local.json")
+        proj = [(local, os.path.realpath(local) == os.path.join(claude_dir, "settings.local.json")),
+                (os.path.join(project, ".claude", "settings.json"), False)]
     seen, result = set(), []
     for path, editable in user + proj:
         real = os.path.realpath(path)
         if real not in seen and os.path.exists(path):
             seen.add(real)
-            result.append((path, editable and not os.path.islink(path)))
+            result.append((real if editable else path, editable))
     return result
 
 
@@ -110,10 +119,11 @@ def write_json_atomic(path, data):
 
 
 def backup(path):
-    """Copy path to path.bak-voiceover without following a symlink planted at that name."""
+    """Copy path to path.bak-voiceover, or path.bak-voiceover.<random> if something other than
+    a regular file holds that name; never writes through a symlink. Returns the backup path."""
     target = path + ".bak-voiceover"
     if os.path.isfile(target) and not os.path.islink(target):
-        os.remove(target)  # our own backup from an earlier run
+        os.remove(target)  # normally our backup from an earlier run; replace it
     try:
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:  # something other than a regular file is there: don't touch it
@@ -131,17 +141,7 @@ def main():
     args = parser.parse_args()
 
     backup_dir = os.path.join(DATA_DIR, "legacy-backup-" + time.strftime("%Y%m%d-%H%M%S"))
-    found, manual = [], []
-
-    for path in legacy_files():
-        found.append(path)
-        if args.remove:
-            if path.endswith(".plist"):
-                subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LEGACY_PLIST_LABEL}"],
-                               capture_output=True)
-            os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
-            os.makedirs(backup_dir, mode=0o700, exist_ok=True)
-            shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
+    found, manual, kept = [], [], []
 
     for path, editable in settings_files(args.project):
         try:
@@ -152,27 +152,45 @@ def main():
         count = strip_legacy_hooks(data)
         if not count:
             continue
-        label = f"{path} ({count} hook{'s' if count > 1 else ''})"
+        label = f"{path} ({count} hook{'s' if count > 1 else ''}"
         if not editable:
-            manual.append(label)
+            manual.append(label + ")")
             continue
-        found.append(label)
         if args.remove:
-            backup(path)
+            label += f"; backup: {backup(path)}"
             write_json_atomic(path, data)
+        found.append(label + ")")
+
+    for path in legacy_files():
+        if manual and LEGACY_HOOK.fullmatch(os.path.basename(path)):
+            kept.append(path)  # hooks we couldn't remove still run it; moving it would break them
+            continue
+        found.append(path)
+        if args.remove:
+            if path.endswith(".plist"):
+                subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LEGACY_PLIST_LABEL}"],
+                               capture_output=True)
+            os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
+            os.makedirs(backup_dir, mode=0o700, exist_ok=True)
+            shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
 
     if not found and not manual:
         print("none found")
         return
     if found:
         if args.remove:
-            print(f"Removed legacy setup (files moved to {backup_dir}; settings backed up as *.bak-voiceover):")
+            print(f"Removed legacy setup (files moved to {backup_dir}):")
         else:
             print("LEGACY SETUP FOUND - every response would be spoken twice. Re-run with --remove-legacy:")
         print("\n".join(f"  - {item}" for item in found))
     if manual:
-        print("Shared project settings or symlinks (not edited automatically; remove the claude_speak hooks by hand):")
+        print("Shared or symlinked project settings (not edited automatically; "
+              "remove the claude_speak hooks by hand):")
         print("\n".join(f"  - {item}" for item in manual))
+    if kept:
+        print(f"{'Left' if args.remove else 'Will be left'} in place because those hooks still run them "
+              "(re-run once the hooks are gone):")
+        print("\n".join(f"  - {item}" for item in kept))
 
 
 if __name__ == "__main__":

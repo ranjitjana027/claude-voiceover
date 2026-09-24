@@ -208,9 +208,21 @@ def test_launcher_kill_switch(tmp_path, monkeypatch):
 
 # ---------- 0.2.1 security review ----------
 
-@pytest.mark.parametrize("text", ["hi [[volm 0]] there", "a [[rate 700]]b", "open [[inpt PHON", "x [[[ y", "[[[[volm 0]]]]"])
-def test_speech_engine_commands_are_stripped(text):
-    assert "[[" not in voiceover.clean_for_speech(text)
+@pytest.mark.parametrize("text, spoken", [
+    ("hi [[volm 0]] there", "hi there"),
+    ("a [[rate 700]]b", "a b"),
+    ("open [[inpt PHON", "open [ [inpt PHON"),
+    ("x [[[ y", "x [ [ [ y"),
+    ("[[[[volm 0]]]]", "]]"),
+    ("list[[1,2],[3]]", "list[ [1,2],[3]]"),  # nested list: one space, sounds the same
+])
+def test_speech_engine_commands_are_stripped(text, spoken):
+    assert voiceover.clean_for_speech(text) == spoken
+
+
+@pytest.mark.parametrize("text", ["a[0][1]", "m[i][j] = 1", "see [1] and [2]"])
+def test_ordinary_brackets_are_spoken_unchanged(text):
+    assert voiceover.clean_for_speech(text) == text
 
 
 def test_state_files_are_private_and_temp_names_are_not_followed(tmp_path):
@@ -221,13 +233,36 @@ def test_state_files_are_private_and_temp_names_are_not_followed(tmp_path):
     assert sentinel.read_text() == "keep"
     assert stat.S_IMODE(os.stat(common.CONFIG_PATH).st_mode) == 0o600
     assert json.load(open(common.CONFIG_PATH))["rate"] == common.DEFAULTS["rate"]
+    assert not list(tmp_path.glob(".*.tmp")), "no temp file left behind"
 
 
 def test_lock_file_symlink_is_not_followed(tmp_path):
     sentinel = tmp_path / "sentinel"
     sentinel.write_text("keep")
     os.symlink(sentinel, os.path.join(common.DATA_DIR, "sessions.lock"))
-    with pytest.raises(OSError):
+    with pytest.raises(common.LockUnsafe, match="is a symlink; delete it"):
         with common.file_lock("sessions.lock"):
             pass
     assert sentinel.read_text() == "keep"
+
+
+def test_symlinked_sessions_lock_still_speaks_with_global_default(tmp_path, monkeypatch, capsys):
+    spoken = []
+    monkeypatch.setattr(voiceover, "speak", lambda text, config, session_id=None: spoken.append(text))
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "sessions.lock"))
+    run_hook(monkeypatch, capsys, {"hook_event_name": "Stop", "session_id": "A", "last_assistant_message": "hello"})
+    assert spoken == ["hello"]
+    assert "is a symlink" in open(common.LOG_PATH).read()
+
+
+def test_symlinked_setup_lock_gives_an_actionable_reply(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "setup.lock"))
+    reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                           "prompt": "/voiceover-setup"})
+    assert reply["stopReason"].startswith("Setup can't start:") and "delete it" in reply["stopReason"]
+
+
+def test_lock_file_is_private():
+    with common.file_lock("x.lock"):
+        pass
+    assert stat.S_IMODE(os.stat(os.path.join(common.DATA_DIR, "x.lock")).st_mode) == 0o600

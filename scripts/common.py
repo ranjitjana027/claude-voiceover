@@ -4,6 +4,7 @@ Standard library only: the hook must run before /voiceover-setup has installed a
 State lives outside the plugin directory because Claude Code replaces that
 directory on every plugin update.
 """
+import errno
 import json
 import os
 import signal
@@ -50,13 +51,18 @@ class LockTimeout(Exception):
     pass
 
 
+class LockUnsafe(LockTimeout):
+    """The lock path is a symlink. Callers treat it like a busy lock; the message says how to fix it."""
+
+
 def ensure_data_dir():
     os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)  # sessions.json lists project paths
 
 
 def write_json_atomic(path, value):
     ensure_data_dir()
-    # mkstemp: a fresh 0600 file (O_EXCL), never a symlink someone left at a guessable name
+    # mkstemp: a fresh 0600 file (O_EXCL), never a symlink someone left at a guessable name;
+    # the file it replaces ends up 0600 too (sessions.json lists project paths)
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -72,9 +78,16 @@ def write_json_atomic(path, value):
 
 @contextmanager
 def file_lock(name, timeout=None):
-    """Exclusive advisory lock on <data dir>/<name>; raises LockTimeout instead of hanging."""
+    """Exclusive advisory lock on <data dir>/<name>; raises LockTimeout instead of hanging,
+    or LockUnsafe if the lock path is a symlink (never opened through it)."""
     ensure_data_dir()
-    fd = os.open(os.path.join(DATA_DIR, name), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    path = os.path.join(DATA_DIR, name)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise LockUnsafe(f"{path} is a symlink; delete it and try again") from None
+        raise
     with os.fdopen(fd, "r+") as lock:
         deadline = time.monotonic() + (LOCK_TIMEOUT_SECONDS if timeout is None else timeout)
         while True:

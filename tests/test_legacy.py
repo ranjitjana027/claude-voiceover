@@ -68,9 +68,12 @@ def test_cli_remove_backs_up_and_keeps_shared_settings(fake_home, tmp_path):
 
     result = run_cli(project.parent, "--remove")
     assert result.returncode == 0, result.stderr
-    assert not (fake_home / ".claude" / "hooks" / "claude_speak.py").exists()
-    backups = list((fake_home / ".claude" / "voiceover").glob("legacy-backup-*/claude_speak.py"))
+    assert not (fake_home / ".claude" / "commands" / "speak.md").exists()
+    backups = list((fake_home / ".claude" / "voiceover").glob("legacy-backup-*/speak.md"))
     assert backups, "legacy file should be moved to a backup, not deleted"
+    # the shared settings.json still runs claude_speak.py, so moving it would break those hooks
+    assert (fake_home / ".claude" / "hooks" / "claude_speak.py").exists()
+    assert "Left in place" in result.stdout
     local = json.loads((project / "settings.local.json").read_text())
     assert "UserPromptSubmit" not in local["hooks"] and local["env"]["NAME"] == "Rañjit"
     assert "Rañjit" in (project / "settings.local.json").read_text()  # no \u escapes
@@ -109,22 +112,32 @@ def test_planted_temp_and_backup_symlinks_are_not_followed(fake_home, tmp_path):
     assert sentinel.read_text() == "export KEEP=1\n"
     assert "UserPromptSubmit" not in json.loads(settings.read_text())["hooks"]
     assert os.path.islink(str(settings) + ".bak-voiceover"), "planted link left alone, backup written elsewhere"
-    backups = [p for p in project.glob("settings.local.json.bak-voiceover.*") if not p.is_symlink()]
-    assert backups and json.loads(backups[0].read_text()) == settings_with_hooks()
+    (backup,) = project.glob("settings.local.json.bak-voiceover.*")
+    assert json.loads(backup.read_text()) == settings_with_hooks()
+    assert f"backup: {backup.resolve()}" in result.stdout, "summary names the real backup"
+    assert not list(project.glob(".voiceover-*")), "no temp file left behind"
 
 
-def test_symlinked_settings_file_is_report_only(fake_home, tmp_path):
-    project = legacy_project(tmp_path)
-    elsewhere = tmp_path / "someone-elses.json"
-    elsewhere.write_text(json.dumps(settings_with_hooks()))
-    os.symlink(elsewhere, project / "settings.local.json")
+@pytest.mark.parametrize("linked", ["file", "dir"])
+def test_symlinked_project_settings_are_report_only(fake_home, tmp_path, linked):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "settings.local.json").write_text(json.dumps(settings_with_hooks()))
+    if linked == "dir":  # the repo commits .claude itself as a symlink
+        (tmp_path / "proj").mkdir()
+        os.symlink(elsewhere, tmp_path / "proj" / ".claude")
+        project = tmp_path / "proj" / ".claude"
+    else:
+        project = legacy_project(tmp_path)
+        os.symlink(elsewhere / "settings.local.json", project / "settings.local.json")
+    (fake_home / ".claude" / "hooks" / "claude_speak.py").write_text("print()")
 
     result = run_cli(project.parent, "--remove")
     assert result.returncode == 0, result.stderr
     assert "not edited automatically" in result.stdout
-    assert (project / "settings.local.json").is_symlink()
-    assert json.loads(elsewhere.read_text()) == settings_with_hooks()
-    assert not list(project.glob("*.bak-voiceover*"))
+    assert json.loads((elsewhere / "settings.local.json").read_text()) == settings_with_hooks()
+    assert not list(elsewhere.glob("*.bak-voiceover*"))
+    assert (fake_home / ".claude" / "hooks" / "claude_speak.py").exists(), "its hooks still need it"
 
 
 def test_backup_dir_is_private_and_follows_data_home(fake_home, tmp_path, monkeypatch):
@@ -136,3 +149,47 @@ def test_backup_dir_is_private_and_follows_data_home(fake_home, tmp_path, monkey
     assert stat.S_IMODE(os.stat(data_home).st_mode) == 0o700
     assert stat.S_IMODE(os.stat(backup).st_mode) == 0o700
     assert (backup / "claude_speak.py").exists()
+
+
+def test_symlinked_user_settings_are_edited_at_the_real_file(fake_home, tmp_path):
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "settings.json"
+    real.write_text(json.dumps(settings_with_hooks()))
+    real.chmod(0o644)
+    link = fake_home / ".claude" / "settings.json"
+    os.symlink(real, link)
+    (fake_home / ".claude" / "hooks" / "claude_speak.py").write_text("print()")
+
+    result = run_cli(tmp_path, "--remove")
+    assert result.returncode == 0, result.stderr
+    assert link.is_symlink(), "the dotfiles link is kept"
+    assert "UserPromptSubmit" not in json.loads(real.read_text())["hooks"]
+    assert stat.S_IMODE(os.stat(real).st_mode) == 0o644, "mode kept"
+    assert json.loads((dotfiles / "settings.json.bak-voiceover").read_text()) == settings_with_hooks()
+    assert not (fake_home / ".claude" / "hooks" / "claude_speak.py").exists(), "no hook needs it any more"
+
+
+def test_backup_replaces_earlier_backup_and_skips_directory(tmp_path):
+    settings = tmp_path / "settings.local.json"
+    settings.write_text("new")
+    earlier = tmp_path / "settings.local.json.bak-voiceover"
+    earlier.write_text("old")
+    assert legacy.backup(str(settings)) == str(earlier) and earlier.read_text() == "new"
+
+    earlier.unlink()
+    earlier.mkdir()
+    target = legacy.backup(str(settings))
+    assert target != str(earlier) and open(target).read() == "new"
+    assert earlier.is_dir() and not list(earlier.iterdir())
+
+
+def test_failed_rewrite_leaves_settings_and_no_temp_file(tmp_path):
+    folder = tmp_path / "proj"
+    folder.mkdir()
+    settings = folder / "settings.local.json"
+    settings.write_text('{"a": 1}')
+    with pytest.raises(TypeError):
+        legacy.write_json_atomic(str(settings), {"x": object()})
+    assert settings.read_text() == '{"a": 1}'
+    assert [p.name for p in folder.iterdir()] == ["settings.local.json"]

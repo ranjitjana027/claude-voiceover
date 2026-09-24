@@ -12,8 +12,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
 
-# Exact pins: a re-run never silently pulls a newer (possibly compromised) release.
-# Transitive dependencies (pyobjc on macOS) are not pinned.
+# Exact pins: every install, fresh or re-run, gets these reviewed versions, never a newer
+# (possibly compromised) release. Transitive dependencies (pyobjc on macOS) are not pinned.
 PACKAGES = ["pyttsx3==2.99"] + (["rumps==0.4.0"] if sys.platform == "darwin" else [])
 OLD_SETUP = [  # the pre-plugin, hand-rolled version of this tool
     "~/.claude/hooks/claude_speak.py",
@@ -45,6 +45,8 @@ def main():
     try:
         with common.file_lock("setup.lock", timeout=0):  # two pip installs into one venv corrupt it
             install()
+    except common.LockUnsafe as error:
+        fail(str(error))
     except common.LockTimeout:
         fail("another setup is already running; wait for it to finish")
 
