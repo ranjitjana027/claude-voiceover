@@ -68,6 +68,18 @@ def sessions_signature():
         return None
 
 
+def lock_guarded(action):
+    """Menu callbacks that edit sessions.json: show a busy/broken lock instead of a silent no-op."""
+    def callback(*args):
+        try:
+            return action(*args)
+        except common.LockUnsafe as error:
+            rumps.alert("Claude Voice-over", str(error))
+        except common.LockTimeout:
+            rumps.alert("Claude Voice-over", "Sessions are busy right now; try again in a moment.")
+    return callback
+
+
 class VoiceoverMenuBar(rumps.App):
     def __init__(self):
         super().__init__("Claude Voice-over", title=ICON_ON, quit_button="Quit")
@@ -221,6 +233,7 @@ class VoiceoverMenuBar(rumps.App):
     # ---------- actions ----------
 
     def _session_toggler(self, session_id):
+        @lock_guarded
         def callback(_):
             with common.sessions_locked() as sessions:
                 entry = sessions.get(session_id)
@@ -233,12 +246,14 @@ class VoiceoverMenuBar(rumps.App):
             self.rebuild_sessions_menu(force=True)
         return callback
 
+    @lock_guarded
     def reset_sessions(self, _):
         with common.sessions_locked() as sessions:
             for entry in sessions.values():
                 entry["enabled"] = None
         self.rebuild_sessions_menu(force=True)
 
+    @lock_guarded
     def forget_sessions(self, _):
         with common.sessions_locked() as sessions:
             sessions.clear()

@@ -140,7 +140,9 @@ def voiceover_command(args, session_id, config):
     if not on:
         common.stop_speaker(session_id)
     note = " (following the global default)" if following_default else ""
-    return f"Voice-over is {'ON' if on else 'OFF'} for this session{note}."
+    problem = common.speaker_lock_problem() if on else None
+    warning = f" Nothing will be spoken until this is fixed: {problem}" if problem else ""
+    return f"Voice-over is {'ON' if on else 'OFF'} for this session{note}.{warning}"
 
 
 def setup_command(args):

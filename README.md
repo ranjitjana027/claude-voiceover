@@ -18,8 +18,10 @@ for leftovers. Then restart Claude Code.
 
 **By hand, with one command:**
 
+Run it from your project folder: the installer checks that project's `.claude` settings for a legacy setup.
+
 ```bash
-git clone https://github.com/ranjitjana027/claude-voiceover && sh claude-voiceover/scripts/install.sh
+CLONE="$(mktemp -d)/claude-voiceover" && git clone --depth 1 https://github.com/ranjitjana027/claude-voiceover "$CLONE" && sh "$CLONE/scripts/install.sh"
 # add --menubar to start the menu bar app at login (not recommended on company-managed Macs)
 ```
 

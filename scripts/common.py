@@ -244,6 +244,12 @@ def stop_speaker(session_id=None):
         terminate(info)
 
 
+def speaker_lock_problem():
+    """Why speaking is impossible right now (a symlinked speaker.lock), or None."""
+    path = os.path.join(DATA_DIR, "speaker.lock")
+    return f"{path} is a symlink; delete it and try again" if os.path.islink(path) else None
+
+
 def claim_speaker(session_id):
     """Become the only speaker: stop the current one and record ourselves, atomically."""
     with file_lock("speaker.lock"):

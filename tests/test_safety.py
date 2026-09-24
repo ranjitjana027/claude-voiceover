@@ -306,3 +306,40 @@ def test_failed_state_write_keeps_old_file_and_leaves_no_temp(tmp_path):
         common.write_json_atomic(common.CONFIG_PATH, {"x": object()})
     assert open(common.CONFIG_PATH).read() == before
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_status_warns_when_speaker_lock_is_broken(tmp_path, monkeypatch, capsys):
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
+    reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
+                                           "prompt": "/voiceover status"})
+    assert "Nothing will be spoken until this is fixed" in reply["stopReason"]
+    assert "speaker.lock is a symlink" in reply["stopReason"]
+
+
+@pytest.fixture
+def menubar_module(monkeypatch):
+    """menubar.py with stand-ins for AppKit/rumps, which only exist on a Mac with setup done."""
+    alerts = []
+    rumps = type(sys)("rumps")
+    rumps.App, rumps.MenuItem = object, object
+    rumps.timer = lambda seconds: (lambda f: f)
+    rumps.alert = lambda title, message: alerts.append(message)
+    monkeypatch.setitem(sys.modules, "rumps", rumps)
+    monkeypatch.setitem(sys.modules, "AppKit", type(sys)("AppKit"))
+    monkeypatch.delitem(sys.modules, "menubar", raising=False)
+    import menubar
+    return menubar, alerts
+
+
+def test_menubar_session_actions_alert_on_lock_problems(menubar_module):
+    menubar, alerts = menubar_module
+
+    def unsafe(_):
+        raise common.LockUnsafe("/x/sessions.lock is a symlink; delete it and try again")
+
+    def busy(_):
+        raise common.LockTimeout("sessions.lock")
+    menubar.lock_guarded(unsafe)(None)
+    menubar.lock_guarded(busy)(None)
+    assert alerts == ["/x/sessions.lock is a symlink; delete it and try again",
+                      "Sessions are busy right now; try again in a moment."]
