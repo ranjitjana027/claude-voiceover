@@ -69,13 +69,16 @@ def test_clean_for_speech_no_limit():
     ("/claude-voiceover:voiceover-setup status", "setup", "status"),
 ])
 def test_command_regex_matches(text, kind, args):
-    match = voiceover.COMMAND.match(text)
+    match = voiceover.match_command(text)
     assert match and match.group(1) == kind and match.group(2) == args
 
 
-@pytest.mark.parametrize("text", ["please fix /voiceover off", "/voiceovers", "voiceover off", "/voice off"])
+@pytest.mark.parametrize("text", [
+    "please fix /voiceover off", "/voiceovers", "voiceover off", "/voice off",
+    "/voiceover off\nalso refactor the auth module",  # regression: extra lines were swallowed
+])
 def test_command_regex_ignores_other_prompts(text):
-    assert voiceover.COMMAND.match(text) is None
+    assert voiceover.match_command(text) is None
 
 
 # ---------- per-session behaviour ----------

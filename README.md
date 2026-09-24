@@ -19,7 +19,8 @@ for leftovers. Then restart Claude Code.
 **By hand, with one command:**
 
 ```bash
-git clone https://github.com/ranjitjana027/claude-voiceover && sh claude-voiceover/scripts/install.sh --menubar
+git clone https://github.com/ranjitjana027/claude-voiceover && sh claude-voiceover/scripts/install.sh
+# add --menubar to start the menu bar app at login (not recommended on company-managed Macs)
 ```
 
 Then restart Claude Code.
@@ -49,8 +50,8 @@ instantly and use no tokens. Each also works fully qualified, for example `/clau
 | `/voiceover default` | Drop this session's override and follow the global default |
 | `/voiceover status` | Show whether this session speaks, and why |
 | `/voiceover global off` / `on` | Default for sessions without their own setting |
-| `/voiceover-menubar start` / `stop` | Run or quit the menu bar app now |
-| `/voiceover-menubar enable` / `disable` | Start the menu bar app at every login, or stop doing that |
+| `/voiceover-menubar start` / `stop` | Run or quit the menu bar app now (recommended) |
+| `/voiceover-menubar enable` / `disable` | Start the menu bar app at every login, or stop doing that (see note below) |
 | `/voiceover-menubar status` | Is it running, and does it start at login? |
 | `/voiceover-setup status` | Last lines of the setup log |
 | `/voiceover-setup uninstall` | Remove the login item; prints the remaining cleanup steps |
@@ -67,6 +68,13 @@ Set `CLAUDE_VOICEOVER=0` in the environment to silence everything.
 - change the voice (any installed macOS voice), rate, volume and max length
 - choose whether to say "code block omitted"
 - play a test voice, or open the config file
+
+**Login item on company-managed Macs.** `enable` registers a LaunchAgent. Endpoint security tools
+(SentinelOne, CrowdStrike, Jamf Protect and others) can treat a login item registered by a script as
+persistence, and may kill and quarantine the processes involved. On a managed Mac, use
+`/voiceover-menubar start` instead, or ask IT to allowlist it. The login item runs a copy of the scripts,
+so after a plugin update, run `enable` again. `/voiceover-menubar status` tells you when that copy is out
+of date. If the plugin is uninstalled, the login item removes itself the next time it starts.
 
 Tip: the newer macOS voices (Zoe, Ava or Evan in premium, and Reed, Sandy, Flo) sound much better than
 the defaults. Add them under System Settings → Accessibility → Spoken Content → System Voice → Manage Voices,
@@ -92,8 +100,24 @@ Everything lives in `~/.claude/voiceover/`, which plugin updates don't touch:
 | `config.json` | Default on/off, voice, rate, volume, max length, code announcement |
 | `sessions.json` | Per-session overrides; ended sessions are removed, stale ones after 7 days |
 | `venv/` | Private virtualenv with pyttsx3 (+ rumps on macOS) |
-| `app/` | Copy of the scripts the menu bar login item runs; refreshed after plugin updates |
-| `setup.log`, `voiceover.log`, `menubar.log` | Diagnostics; voice-over never raises errors into Claude Code |
+| `app/` | Only with the login item: the scripts it runs, copied when you run `enable` |
+| `legacy-backup-*/` | Files moved aside by `install.sh --remove-legacy` |
+| `setup.log`, `voiceover.log`, `menubar.log` | Diagnostics, capped at 256 KB each; voice-over never raises errors into Claude Code |
+
+The folder is private (`700`) because `sessions.json` lists your project paths.
+
+## Safety
+
+- **Signals only its own processes.** Before any signal is sent, the process's current command line is
+  checked. A pid that has been reused by another program after voice-over's own process died is never
+  touched.
+- **Never slows a prompt.** A normal prompt costs about 70 ms and prints nothing. Lock waits give up after
+  2 s. Before setup has run, ordinary events don't even start Python.
+- **Cheap text cleaning.** Only a bounded amount of text is cleaned, with bounded patterns, so a huge
+  response costs milliseconds.
+- **Commands never leak.** A `/voiceover…` command has to be the entire prompt, on one line; anything
+  longer goes to Claude untouched. A failed command still gets an answer instead of reaching the model.
+- **Quiet elsewhere.** On Windows it's a silent no-op. Set `CLAUDE_VOICEOVER=0` to turn everything off.
 
 ## Uninstall
 

@@ -7,7 +7,8 @@ claude-voiceover hook entrypoint (Stop, UserPromptSubmit, SessionEnd).
   SessionEnd        forget the session
 
 Slash commands are intercepted here and blocked, so they never reach the model:
-they apply instantly and cost no tokens.
+they apply instantly and cost no tokens. A command must be the whole prompt, on
+one line; anything longer goes to Claude untouched.
 
   /voiceover [on|off|toggle|default|status]   this session
   /voiceover global [on|off]                  default for sessions without an override
@@ -28,8 +29,14 @@ import menubar_ctl  # noqa: E402
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # Plugin commands can be typed bare (/voiceover) or qualified (/claude-voiceover:voiceover).
-COMMAND = re.compile(r"^\s*/(?:claude-voiceover:)?voiceover(?:-(menubar|setup))?(?:\s+(.*?))?\s*$", re.S | re.I)
+COMMAND = re.compile(r"/(?:claude-voiceover:)?voiceover(?:-(menubar|setup))?(?:[ \t]+([^\n]*?))?[ \t]*", re.I)
 SETUP_HINT = "Voice-over isn't set up yet. Run /voiceover-setup once (about a minute), then restart Claude Code."
+# Cleaning runs on at most this much text, so a huge response can't cost more than a few ms.
+CLEAN_INPUT_LIMIT = 20_000
+
+
+def match_command(prompt):
+    return COMMAND.fullmatch((prompt or "").strip())
 
 
 # ---------- text ----------
@@ -58,17 +65,20 @@ def last_message_from_transcript(path):
 
 
 def clean_for_speech(text, max_chars=common.DEFAULTS["max_chars"], announce_code=True):
+    # Cut first: every pattern below is bounded, but there is no reason to scan a 1 MB log.
+    limit = min(max_chars * 4, CLEAN_INPUT_LIMIT) if max_chars else CLEAN_INPUT_LIMIT
+    text = text[:limit]
     code_placeholder = " (code block omitted) " if announce_code else " "
-    text = re.sub(r"```.*?```", code_placeholder, text, flags=re.S)
-    text = re.sub(r"`([^`]*)`", r"\1", text)                      # inline code
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)          # links -> label
-    text = re.sub(r"https?://\S+", " link ", text)                # bare URLs
-    text = re.sub(r"^\s*\|.*\|\s*$", "", text, flags=re.M)        # tables
-    text = re.sub(r"^\s*#{1,6}\s*", "", text, flags=re.M)         # headers
-    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.M)          # bullets
-    text = re.sub(r"(\*{1,2})(\S.*?\S|\S)\1", r"\2", text)                  # *em* / **bold**
-    text = re.sub(r"(?<!\w)(_{1,2})(\S.*?\S|\S)\1(?!\w)", r"\2", text)      # _em_, keeps snake_case
-    text = re.sub(r"[~>]", "", text)                              # strikethrough/quotes
+    text = re.sub(r"```.*?(?:```|$)", code_placeholder, text, flags=re.S)       # fenced (even unclosed)
+    text = re.sub(r"`([^`\n]*)`", r"\1", text)                                   # inline code
+    text = re.sub(r"\[([^\]\n]{1,300})\]\([^)\s]{1,2000}\)", r"\1", text)        # links -> label
+    text = re.sub(r"https?://\S+", " link ", text)                              # bare URLs
+    text = re.sub(r"^[ \t]*\|[^\n]*\|[ \t]*$", "", text, flags=re.M)            # tables
+    text = re.sub(r"^[ \t]*#{1,6}[ \t]*", "", text, flags=re.M)                 # headers
+    text = re.sub(r"^[ \t]*[-*+][ \t]+", "", text, flags=re.M)                  # bullets
+    text = re.sub(r"(\*{1,2})(?=\S)([^*\n]{1,300}?)(?<=\S)\1", r"\2", text)     # *em* / **bold**
+    text = re.sub(r"(?<!\w)(_{1,2})(?=\S)([^_\n]{1,300}?)(?<=\S)\1(?!\w)", r"\2", text)  # _em_, keeps snake_case
+    text = re.sub(r"[~>]", "", text)                                            # strikethrough/quotes
     text = re.sub(r"\s+", " ", text).strip()
     if max_chars and len(text) > max_chars:
         text = text[:max_chars].rsplit(" ", 1)[0] + ". Response truncated."
@@ -81,8 +91,7 @@ def speak(text, config, session_id=None):
     except ImportError:
         common.log("pyttsx3 missing; run /voiceover-setup")
         return
-    common.stop_speaker()  # one voice at a time across all sessions
-    common.write_pidfile(common.SPEAKER_PIDFILE, session_id=session_id)
+    common.claim_speaker(session_id)  # one voice at a time across all sessions
     try:
         engine = pyttsx3.init()
         engine.setProperty("rate", config["rate"])
@@ -94,7 +103,7 @@ def speak(text, config, session_id=None):
     except Exception as error:  # a broken audio device must never surface in Claude Code
         common.log(f"speak failed: {error!r}")
     finally:
-        common.release_pidfile(common.SPEAKER_PIDFILE)
+        common.release_speaker()
 
 
 # ---------- commands ----------
@@ -130,12 +139,17 @@ def setup_command(args):
     if action == "status":
         return setup_status()
     if action == "uninstall":
-        menubar_ctl.disable()
-        return ("Menu bar login item removed. To finish: /plugin uninstall claude-voiceover, "
-                f"then delete {common.DATA_DIR}")
+        removed = menubar_ctl.disable() if sys.platform == "darwin" else "No login item on this platform."
+        return (f"{removed} To finish: /plugin uninstall claude-voiceover, then delete {common.DATA_DIR}")
     if action != "install":
         return "Unknown option. Use: /voiceover-setup, /voiceover-setup status, /voiceover-setup uninstall."
-    # pip install takes ~1 min, longer than UserPromptSubmit may block, so run detached.
+    try:
+        with common.file_lock("setup.lock", timeout=0):
+            pass
+    except common.LockTimeout:
+        return "Setup is already running. Check progress with /voiceover-setup status."
+    # pip install takes ~1 min, longer than UserPromptSubmit may block, so run detached;
+    # setup.py takes setup.lock itself for its whole run.
     common.ensure_data_dir()
     with open(os.path.join(common.DATA_DIR, "setup.log"), "w") as log_file:
         subprocess.Popen([sys.executable, os.path.join(SCRIPTS_DIR, "setup.py")],
@@ -172,12 +186,14 @@ def on_stop(data):
         return
     config = common.load_config()
     session_id = data.get("session_id")
+    enabled = config["enabled"]
     if session_id:
-        with common.sessions_locked() as sessions:
-            entry = common.touch_session(sessions, session_id, data.get("cwd"))
-            enabled = common.session_enabled(entry, config)
-    else:
-        enabled = config["enabled"]
+        try:
+            with common.sessions_locked() as sessions:
+                enabled = common.session_enabled(
+                    common.touch_session(sessions, session_id, data.get("cwd")), config)
+        except common.LockTimeout:
+            common.log("sessions lock busy; using the global default")
     if not enabled:
         return
 
@@ -191,12 +207,20 @@ def on_stop(data):
 def on_user_prompt(data):
     session_id = data.get("session_id")
     common.stop_speaker(session_id)  # a new prompt interrupts this session's speech only
-    match = COMMAND.match(data.get("prompt") or "")
+    match = match_command(data.get("prompt"))
     if match:
-        print(json.dumps({"decision": "block", "reason": handle_command(match, data)}))
+        try:
+            reason = handle_command(match, data)
+        except Exception as error:  # still answer, so the command never leaks to the model
+            common.log(f"command failed: {error!r}")
+            reason = f"Voice-over command failed: {error}. Details in {common.LOG_PATH}"
+        print(json.dumps({"decision": "block", "reason": reason}))
     elif session_id:
-        with common.sessions_locked() as sessions:
-            common.touch_session(sessions, session_id, data.get("cwd"))
+        try:
+            with common.sessions_locked() as sessions:
+                common.touch_session(sessions, session_id, data.get("cwd"))
+        except common.LockTimeout:
+            pass  # bookkeeping only; never delay the user's prompt for it
 
 
 def on_session_end(data):
@@ -211,8 +235,8 @@ HANDLERS = {"Stop": on_stop, "UserPromptSubmit": on_user_prompt, "SessionEnd": o
 
 
 def main():
-    if os.environ.get("CLAUDE_VOICEOVER", "1") == "0":
-        return
+    if os.environ.get("CLAUDE_VOICEOVER", "1") == "0" or common.fcntl is None:
+        return  # disabled, or Windows (unsupported): stay silent rather than error on every event
     try:
         data = json.load(sys.stdin)
     except json.JSONDecodeError:

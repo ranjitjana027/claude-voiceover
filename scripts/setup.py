@@ -40,8 +40,15 @@ def run(*cmd):
 def main():
     if sys.version_info < (3, 9):
         fail(f"Python 3.9+ required, found {sys.version.split()[0]} at {sys.executable}")
-    common.ensure_data_dir()
+    try:
+        with common.file_lock("setup.lock", timeout=0):  # two pip installs into one venv corrupt it
+            install()
+    except common.LockTimeout:
+        fail("another setup is already running; wait for it to finish")
 
+
+def install():
+    os.chmod(common.DATA_DIR, 0o700)  # tighten data dirs created by older versions
     if os.path.exists(common.VENV_PYTHON):
         step(f"Reusing virtualenv {os.path.dirname(os.path.dirname(common.VENV_PYTHON))}")
     else:

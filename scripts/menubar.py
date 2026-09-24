@@ -6,6 +6,7 @@ Global settings go to config.json and per-session on/off to sessions.json in the
 data dir; the hook re-reads both on each turn, so changes apply from the next response.
 """
 import atexit
+import glob
 import json
 import os
 import subprocess
@@ -43,7 +44,21 @@ def installed_voices():
 
 
 def is_speaking():
-    return common.read_pidfile(common.SPEAKER_PIDFILE) is not None
+    return common.current_speaker() is not None
+
+
+def plugin_installed():
+    return bool(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/claude-voiceover")))
+
+
+def remove_orphaned_login_item():
+    """Login copy outliving an uninstalled plugin: delete our LaunchAgent instead of lingering."""
+    import menubar_ctl
+    try:
+        os.remove(menubar_ctl.PLIST_PATH)
+    except FileNotFoundError:
+        pass
+    common.log("plugin uninstalled; removed the menu bar login item")
 
 
 def sessions_signature():
@@ -270,8 +285,11 @@ def hide_dock_icon():
 
 
 if __name__ == "__main__":
-    if common.read_pidfile(common.MENUBAR_PIDFILE):
-        sys.exit(0)  # already running
+    if os.path.dirname(os.path.abspath(__file__)) == os.path.abspath(common.APP_DIR) and not plugin_installed():
+        remove_orphaned_login_item()
+        sys.exit(0)
+    if common.read_pidfile(common.MENUBAR_PIDFILE, common.MENUBAR_MARKERS):
+        sys.exit(0)  # already running (verified: a reused pid doesn't count)
     common.write_pidfile(common.MENUBAR_PIDFILE)
     atexit.register(common.release_pidfile, common.MENUBAR_PIDFILE)
     hide_dock_icon()

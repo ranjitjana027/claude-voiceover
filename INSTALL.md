@@ -8,7 +8,10 @@ environment, including ones where `/plugin` is unavailable.
 ## 1. Ask one question up front
 
 Ask the user (a single question) whether the **menu bar app should start at login**. It's macOS only; skip the
-question on other platforms. Their answer decides whether you pass `--menubar`.
+question on other platforms. Their answer decides whether you pass `--menubar`. Say in the question that this
+registers a LaunchAgent, and that on a **company-managed Mac** (with endpoint security such as SentinelOne,
+CrowdStrike or Jamf Protect) the recommended answer is **no**: security tools can flag a script-registered login
+item as persistence. They can still run the app any time with `/voiceover-menubar start`.
 
 ## 2. Get the installer
 
@@ -45,8 +48,13 @@ remove them. If the user agrees, re-run with the flag:
 sh <clone>/scripts/install.sh --remove-legacy [--menubar]
 ```
 
-This deletes the listed files, unloads the old login item, and removes only hooks whose command mentions
-`claude_speak` from the settings files. Each edited settings file is backed up first as `*.bak-voiceover`.
+This moves the listed files into `~/.claude/voiceover/legacy-backup-<timestamp>/` (nothing is deleted) and unloads
+the old login item. From the settings files it removes only the hooks that run `claude_speak.py` or
+`claude_speak_menubar.py`. Each edited settings file is backed up first as `*.bak-voiceover`.
+
+A project's shared `.claude/settings.json` is usually committed to git, so it is **never edited**. If it has
+legacy hooks, the output lists it under "Shared project settings". Tell the user, and offer to remove those
+hooks by hand only if they ask.
 
 ## 5. Finish
 

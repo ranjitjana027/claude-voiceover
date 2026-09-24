@@ -13,7 +13,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REQUIRED = [
     "scripts/run.sh", "scripts/voiceover.py", "scripts/common.py", "scripts/menubar_ctl.py",
-    "scripts/menubar.py", "scripts/setup.py", "scripts/install.sh",
+    "scripts/menubar.py", "scripts/setup.py", "scripts/install.sh", "scripts/legacy.py",
     "hooks/hooks.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
 ]
 

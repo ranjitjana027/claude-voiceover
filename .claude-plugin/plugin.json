@@ -1,6 +1,6 @@
 {
   "name": "claude-voiceover",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Reads Claude's final response aloud, with per-session on/off and a macOS menu bar app. Fully local (pyttsx3), no API keys.",
   "author": { "name": "Ranjit Jana" },
   "license": "MIT",

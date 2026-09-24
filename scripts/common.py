@@ -1,24 +1,38 @@
-"""Shared state for claude-voiceover: paths, global config, per-session flags, speaker pid.
+"""Shared state for claude-voiceover: paths, global config, per-session flags, process tracking.
 
 Standard library only: the hook must run before /voiceover-setup has installed anything.
 State lives outside the plugin directory because Claude Code replaces that
 directory on every plugin update.
 """
-import fcntl
 import json
 import os
 import signal
+import subprocess
 import time
 from contextlib import contextmanager
 
+try:
+    import fcntl
+except ImportError:  # Windows: unsupported; voiceover.main() exits before anything needs it
+    fcntl = None
+
+VERSION = "0.2.0"
 DATA_DIR = os.path.expanduser(os.environ.get("CLAUDE_VOICEOVER_HOME", "~/.claude/voiceover"))
 VENV_PYTHON = os.path.join(DATA_DIR, "venv", "bin", "python")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 SESSIONS_PATH = os.path.join(DATA_DIR, "sessions.json")
 SPEAKER_PIDFILE = os.path.join(DATA_DIR, "speaker.pid")
 MENUBAR_PIDFILE = os.path.join(DATA_DIR, "menubar.pid")
-APP_DIR = os.path.join(DATA_DIR, "app")  # copy of scripts/ kept by run.sh; what the menu bar runs
+APP_DIR = os.path.join(DATA_DIR, "app")  # copy of scripts/ the login item runs; written only by enable
 LOG_PATH = os.path.join(DATA_DIR, "voiceover.log")
+LOG_MAX_BYTES = 256 * 1024
+LOCK_TIMEOUT_SECONDS = 2  # never let a stuck lock holder stall the user's prompt
+
+# Command-line fragments that identify our own processes. A pid is only ever signalled
+# if its current command line still contains all of them, so a pid reused by an
+# unrelated program after our process died is never touched.
+SPEAKER_MARKERS = ("python", "voiceover")
+MENUBAR_MARKERS = ("python", "menubar.py")
 
 SESSION_TTL_SECONDS = 7 * 24 * 3600  # drop sessions that vanished without SessionEnd
 DEFAULTS = {
@@ -31,8 +45,12 @@ DEFAULTS = {
 }
 
 
+class LockTimeout(Exception):
+    pass
+
+
 def ensure_data_dir():
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)  # sessions.json lists project paths
 
 
 def write_json_atomic(path, value):
@@ -41,6 +59,23 @@ def write_json_atomic(path, value):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(value, f, indent=2)
     os.replace(tmp_path, path)  # readers never see half a file
+
+
+@contextmanager
+def file_lock(name, timeout=None):
+    """Exclusive advisory lock on <data dir>/<name>; raises LockTimeout instead of hanging."""
+    ensure_data_dir()
+    with open(os.path.join(DATA_DIR, name), "w") as lock:
+        deadline = time.monotonic() + (LOCK_TIMEOUT_SECONDS if timeout is None else timeout)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise LockTimeout(name)
+                time.sleep(0.02)
+        yield
 
 
 # ---------- global config ----------
@@ -89,9 +124,7 @@ def read_sessions():
 @contextmanager
 def sessions_locked():
     """Read-modify-write the sessions file under an exclusive lock (hooks run concurrently)."""
-    ensure_data_dir()
-    with open(SESSIONS_PATH + ".lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with file_lock("sessions.lock"):
         sessions = read_sessions()
         yield sessions
         now = time.time()
@@ -113,17 +146,32 @@ def session_enabled(entry, config):
     return config["enabled"] if override is None else bool(override)
 
 
-# ---------- pidfiles ----------
+# ---------- process tracking ----------
 
-def read_pidfile(path):
-    """Return the pidfile's JSON if its process is alive, else None."""
+def process_command(pid):
+    try:
+        result = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+def read_pidfile(path, markers):
+    """Return the pidfile's JSON only if that pid is alive AND is still our process."""
     try:
         with open(path, encoding="utf-8") as f:
             info = json.load(f)
-        os.kill(int(info["pid"]), 0)
-        return info
+        pid = int(info["pid"])
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
+    if pid <= 1:  # 0 / -1 would signal whole process groups
+        return None
+    command = process_command(pid).lower()  # framework builds show ".../Python"
+    if not command or not all(marker in command for marker in markers):
+        return None  # dead, or the pid now belongs to an unrelated program
+    info["pid"] = pid
+    return info
 
 
 def write_pidfile(path, **extra):
@@ -131,29 +179,67 @@ def write_pidfile(path, **extra):
 
 
 def release_pidfile(path):
-    info = read_pidfile(path)
-    if info and info["pid"] == os.getpid():
-        try:
+    try:
+        with open(path, encoding="utf-8") as f:
+            mine = json.load(f).get("pid") == os.getpid()
+        if mine:
             os.remove(path)
-        except OSError:
+    except (OSError, ValueError, AttributeError, json.JSONDecodeError):
+        pass
+
+
+def terminate(info):
+    try:
+        os.kill(info["pid"], signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def current_speaker():
+    """The live speaker's pidfile info, or None. Clears a stale pidfile (speech killed
+    mid-sentence never removes its own), so later calls don't pay for a `ps` each time."""
+    if not os.path.exists(SPEAKER_PIDFILE):
+        return None
+    info = read_pidfile(SPEAKER_PIDFILE, SPEAKER_MARKERS)
+    if info is None:
+        try:
+            with file_lock("speaker.lock", timeout=0):  # a new speaker writes under this lock
+                if read_pidfile(SPEAKER_PIDFILE, SPEAKER_MARKERS) is None:
+                    os.remove(SPEAKER_PIDFILE)
+        except (LockTimeout, OSError):
             pass
+    return info
 
 
 def stop_speaker(session_id=None):
     """Stop the current speaker; with session_id, only if it belongs to that session."""
-    info = read_pidfile(SPEAKER_PIDFILE)
+    info = current_speaker()
     if not info or info["pid"] == os.getpid():
         return
     if session_id is None or info.get("session_id") == session_id:
-        try:
-            os.kill(info["pid"], signal.SIGTERM)
-        except OSError:
-            pass
+        terminate(info)
+
+
+def claim_speaker(session_id):
+    """Become the only speaker: stop the current one and record ourselves, atomically."""
+    with file_lock("speaker.lock"):
+        stop_speaker()
+        write_pidfile(SPEAKER_PIDFILE, session_id=session_id)
+
+
+def release_speaker():
+    try:
+        with file_lock("speaker.lock"):
+            release_pidfile(SPEAKER_PIDFILE)
+    except LockTimeout:
+        pass  # a new speaker is taking over; it overwrites the pidfile anyway
 
 
 def log(message):
     try:
         ensure_data_dir()
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > LOG_MAX_BYTES:
+            os.replace(LOG_PATH, LOG_PATH + ".1")
         with open(LOG_PATH, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
     except OSError:
