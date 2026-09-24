@@ -18,36 +18,44 @@ Left in place, it speaks every response a second time. Removal is conservative:
     rewriting it would destroy those bytes
   - temp and backup files are created fresh (O_EXCL/O_NOFOLLOW), never through a planted link
   - while any report-only file still runs claude_speak*.py, both scripts stay in place (the
-    rest is still moved), so the remaining hooks keep working instead of failing on every event
-  - a failure on one settings file or legacy file is reported and the rest carry on; the
-    summary always prints and exit status stays 0, because legacy cleanup is optional and must
-    not abort the installer
+    rest is still moved), so the remaining hooks keep working instead of failing on every event;
+    likewise claude_speak_menubar.py stays if the old login item (handled first) can't be moved
+  - a settings file that isn't a regular file, is over 4 MB or is too deeply nested to parse is
+    listed as unreadable, never read in full: a cloned repo could point it at /dev/zero
+  - a failure on one settings file or legacy file is reported and the rest carry on; even an
+    unexpected error is reported (with what was already done) and exit status stays 0, because
+    legacy cleanup is optional and must not abort the installer. Only Ctrl-C exits non-zero.
 """
 import argparse
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 LEGACY_HOOK = re.compile(r"claude_speak(?:_menubar)?\.py")
 LEGACY_PLIST_LABEL = "local.claude-speak-menubar"
 HOME = os.path.expanduser("~")
 DATA_DIR = os.path.expanduser(os.environ.get("CLAUDE_VOICEOVER_HOME", "~/.claude/voiceover"))
+MAX_SETTINGS_BYTES = 4 << 20
 
 
 def legacy_files():
+    """Existing legacy files. The login item comes first: if it can't be moved, the script it
+    runs (claude_speak_menubar.py) must stay."""
+    files = [os.path.join(HOME, "Library", "LaunchAgents", f"{LEGACY_PLIST_LABEL}.plist")]
     hooks_dir = os.path.join(HOME, ".claude", "hooks")
-    files = [os.path.join(hooks_dir, name) for name in (
+    files += [os.path.join(hooks_dir, name) for name in (
         "claude_speak.py", "claude_speak_menubar.py", "claude_speak.json",
         "claude_speak_sessions.json", "claude_speak_sessions.json.lock")]
     speak_md = os.path.join(HOME, ".claude", "commands", "speak.md")
     if _mentions_legacy(speak_md):  # someone else's /speak command is left alone
         files.append(speak_md)
-    files.append(os.path.join(HOME, "Library", "LaunchAgents", f"{LEGACY_PLIST_LABEL}.plist"))
     return [path for path in files if os.path.exists(path)]
 
 
@@ -143,8 +151,8 @@ def backup(path):
 
 def promote_backup(staged, path):
     """Rename the staged copy to path.bak-voiceover and return the final name. If something
-    other than a regular file holds that name (a planted link, a folder), leave it alone and
-    keep the staged name."""
+    other than a regular file holds that name (a planted link, a folder), or the rename fails,
+    leave that name alone and keep the staged one (<file>.bak-voiceover.<random>)."""
     target = path + ".bak-voiceover"
     if os.path.lexists(target) and not (os.path.isfile(target) and not os.path.islink(target)):
         return staged
@@ -167,11 +175,18 @@ def writable(path):
 
 
 def read_settings(path):
-    """(data, note). note is set for a file that isn't valid UTF-8, parsed the way Claude Code
-    does (bad bytes become U+FFFD) so its hooks are still seen, but not safe to rewrite.
-    An empty file is data None. Raises OSError / ValueError when it can't be parsed at all."""
-    with open(path, "rb") as f:
-        raw = f.read()
+    """(data, note). A leading BOM is ignored. note is set for a file that isn't valid UTF-8,
+    parsed the way Claude Code does (bad bytes become U+FFFD) so its hooks are still seen, but
+    not safe to rewrite. An empty file is data None. Raises OSError, ValueError (not a regular
+    file, over MAX_SETTINGS_BYTES, bad JSON) or RecursionError (nested too deeply to parse)."""
+    # O_NONBLOCK: opening a planted FIFO must not hang; the fstat below then rejects it
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("not a regular file")
+        raw = f.read(MAX_SETTINGS_BYTES + 1)
+    if len(raw) > MAX_SETTINGS_BYTES:
+        raise ValueError(f"larger than {MAX_SETTINGS_BYTES >> 20} MB")
     if not raw.strip():
         return None, None
     try:
@@ -201,12 +216,13 @@ def main():
 
     backup_dir = os.path.join(DATA_DIR, "legacy-backup-" + time.strftime("%Y%m%d-%H%M%S"))
     found, manual, kept, unreadable, failed = [], [], [], [], []
-    moved = False
+    moved = completed = False
+    crash = None
     try:
         for path, editable in settings_files(args.project):
             try:
                 data, note = read_settings(path)
-            except (OSError, ValueError) as error:  # Claude Code can't load it either
+            except (OSError, ValueError, RecursionError) as error:
                 unreadable.append(f"{path} ({error.__class__.__name__}: {error})")
                 continue
             count = strip_legacy_hooks(data)
@@ -220,52 +236,82 @@ def main():
             if editable and args.remove:
                 try:
                     label += f"; backup: {remove_hooks(path, data)}"
-                except (OSError, ValueError) as error:  # ValueError: e.g. a lone surrogate can't be written
+                except (OSError, ValueError, RecursionError) as error:  # e.g. a lone surrogate can't be written
                     editable, label = False, label + f"; could not edit: {error}"
             (found if editable else manual).append(label + ")")
 
+        login_item_stuck = False
         for path in legacy_files():
-            if manual and LEGACY_HOOK.fullmatch(os.path.basename(path)):
+            name = os.path.basename(path)
+            if manual and LEGACY_HOOK.fullmatch(name):
                 kept.append(path)  # hooks we couldn't remove still run it; moving it would break them
+                continue
+            if login_item_stuck and name == "claude_speak_menubar.py":
+                kept.append(f"{path} (the old login item still runs it)")
                 continue
             if not args.remove:
                 found.append(path)
                 continue
+            destination = os.path.join(backup_dir, name)
             try:
                 if path.endswith(".plist"):
                     subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LEGACY_PLIST_LABEL}"],
                                    capture_output=True)
                 os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
                 os.makedirs(backup_dir, mode=0o700, exist_ok=True)
-                shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
+                shutil.move(path, destination)
             except OSError as error:
-                failed.append(f"{path} (could not move: {error})")
+                # a cross-device move copies before it deletes, so a copy may be left behind
+                copy = f"; a copy is in {destination}" if os.path.lexists(destination) else ""
+                failed.append(f"{path} (could not move: {error}{copy})")
+                login_item_stuck = login_item_stuck or path.endswith(".plist")
                 continue
             found.append(path)
             moved = True
-    finally:  # even after an unexpected error, say what was already changed
-        report(args.remove, backup_dir if moved else None, found, manual, kept, failed, unreadable)
+        completed = True
+    except Exception as error:  # optional cleanup: report it, but never abort the installer
+        crash = f"{error.__class__.__name__}: {error}"
+        traceback.print_exc()
+    finally:  # even after an unexpected error or Ctrl-C, say what was already changed
+        try:
+            report(args.remove, backup_dir if moved else None, found, manual, kept, failed, unreadable,
+                   completed, crash)
+        except OSError:  # e.g. stdout is a closed pipe; the changes themselves are done
+            _silence_stdout()
 
 
-def report(removing, backup_dir, found, manual, kept, failed, unreadable):
+def _silence_stdout():
+    """Point stdout at /dev/null so the exit-time flush can't fail again on a closed pipe."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+    except (OSError, ValueError):
+        pass
+
+
+def report(removing, backup_dir, found, manual, kept, failed, unreadable, completed=True, crash=None):
     def section(title, items):
         if items:
             print(title)
             print("\n".join(f"  - {item}" for item in items))
 
-    if not (found or manual or kept or failed):
-        print("none found")
-    elif removing:
+    if not completed:
+        done = "only what is listed below was done" if removing else "the list below may be incomplete"
+        print(f"Legacy check stopped early ({crash or 'interrupted'}); {done}.")
+    elif not (found or manual or kept or failed or unreadable):
+        print("no legacy setup found")
+    if removing:
         section(f"Removed legacy setup (files moved to {backup_dir}):" if backup_dir else "Removed legacy setup:",
                 found)
     else:
         section("LEGACY SETUP FOUND - every response would be spoken twice. Re-run with --remove-legacy:", found)
-    section("Shared, symlinked or unwritable settings (not edited automatically; "
+    section("Settings not edited automatically (shared, symlinked, unwritable, not UTF-8 or failed to edit; "
             "remove the claude_speak hooks by hand):", manual)
-    section(f"{'Left' if removing else 'Will be left'} in place because those hooks still run them "
-            "(re-run once the hooks are gone):", kept)
+    section(f"{'Left' if removing else 'Will be left'} in place because hooks or the old login item still run "
+            "them (re-run once those are gone):", kept)
     section("Could not move (still in place; move or delete by hand):", failed)
-    section("Could not read (Claude Code can't load these either; fix or delete them):", unreadable)
+    section("Could not read (check these by hand for claude_speak hooks):", unreadable)
 
 
 if __name__ == "__main__":

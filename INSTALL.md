@@ -49,9 +49,8 @@ exactly as printed; don't try to work around it.
 
 ## 4. Legacy setup
 
-If the output says **LEGACY SETUP FOUND**, or lists **Shared, symlinked or unwritable settings**, **Could not
-move** or **Could not read**, show the user the listed items and explain that they come from an earlier
-hand-rolled version of this tool. If left in place, every response is spoken twice. Ask whether to
+If the output says **LEGACY SETUP FOUND**, show the user the listed items and explain that they come from an
+earlier hand-rolled version of this tool. If left in place, every response is spoken twice. Ask whether to
 remove them. If the user agrees, re-run with the flag:
 
 ```bash
@@ -63,16 +62,24 @@ under `~/.claude/voiceover/`) and unloads the old login item. From the settings 
 that run `claude_speak.py` or `claude_speak_menubar.py`. Each edited settings file is first backed up next to
 itself as `<file>.bak-voiceover` (or `<file>.bak-voiceover.<random>` if that name is taken by something else);
 the output gives each backup's path. A symlinked `~/.claude/settings*.json` is edited at its real file, and its
-backup is written next to that file. Files it could not move are listed under "Could not move" and stay put.
+backup is written next to that file.
 
-A project's shared `.claude/settings.json` is usually committed to git, so it is **never edited**; neither is a
-project `settings.local.json` that is a symlink or sits in a symlinked `.claude` directory, a settings file that
-can't be written, or one that isn't valid UTF-8 (rewriting it would destroy those bytes). If one has legacy hooks,
-the output lists it under "Shared, symlinked or unwritable settings", and the old `claude_speak*.py` scripts stay
-in place ("Will be left in place", or "Left in place" after `--remove-legacy`) so those hooks keep working. Tell
-the user, and offer to remove those hooks by hand only if they ask; once they are gone, re-running with
-`--remove-legacy` moves the scripts too. Files under "Could not read" are broken JSON or unreadable, so Claude
-Code can't load them either; the user should fix or delete them.
+Some items need the user rather than a re-run. Tell the user about each of these sections if it appears, and
+offer to help by hand only if they ask:
+
+- **Settings not edited automatically**: these settings files still have legacy hooks, but are never edited: a
+  project's shared `.claude/settings.json` (usually committed to git), a project `settings.local.json` that is a
+  symlink or sits in a symlinked `.claude` directory, a file that can't be written, one that isn't valid UTF-8
+  (rewriting it would destroy those bytes), or one whose rewrite failed. The user removes the `claude_speak`
+  hooks by hand. Until then the old `claude_speak*.py` scripts stay in place ("Will be left in place", or "Left
+  in place" after `--remove-legacy`) so those hooks keep working; once they are gone, re-running with
+  `--remove-legacy` moves the scripts too.
+- **Could not move**: the file is still in place (the line gives the error); the user moves or deletes it by
+  hand. If the old login item is listed here, `claude_speak_menubar.py` stays too, because it still runs it.
+- **Could not read**: a settings file that is broken JSON, not a regular file, over 4 MB or too deeply nested
+  to check. It may still hold legacy hooks; the user should look at it.
+- **Legacy check stopped early**: an unexpected error; only the listed items were handled. Report the error
+  line to the user. The plugin itself is installed either way.
 
 ## 5. Finish
 

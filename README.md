@@ -110,7 +110,7 @@ Everything lives in `~/.claude/voiceover/`, which plugin updates don't touch:
 
 The folder is private (`700`) because `sessions.json` lists your project paths. `--remove-legacy` also leaves a
 `<settings file>.bak-voiceover` backup next to each settings file it edits (next to the real file if the settings
-file is a symlink).
+file is a symlink), or `<settings file>.bak-voiceover.<random>` if that name is already taken by something else.
 
 ## Safety
 

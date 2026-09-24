@@ -89,7 +89,7 @@ def test_cli_remove_backs_up_and_keeps_shared_settings(fake_home, tmp_path):
 def test_unrelated_speak_command_is_left_alone(fake_home, tmp_path):
     speak = fake_home / ".claude" / "commands" / "speak.md"
     speak.write_text("My own /speak command that reads a file aloud")
-    assert "none found" in run_cli(tmp_path, "--remove").stdout
+    assert "no legacy setup found" in run_cli(tmp_path, "--remove").stdout
     assert speak.exists()
 
 
@@ -198,8 +198,12 @@ def test_failed_rewrite_keeps_the_earlier_backup(tmp_path, monkeypatch):
     settings.write_text('{"v": "current"}')
     earlier = folder / "settings.local.json.bak-voiceover"
     earlier.write_text("old")
-    with pytest.raises(ValueError):  # a lone surrogate can't be encoded as UTF-8
-        legacy.remove_hooks(str(settings), {"v": "\ud800"})
+
+    def replace_fails(src, dst):
+        raise OSError(5, "Input/output error")
+    monkeypatch.setattr(legacy.os, "replace", replace_fails)
+    with pytest.raises(OSError):
+        legacy.remove_hooks(str(settings), {"v": "stripped"})
     assert earlier.read_text() == "old" and settings.read_text() == '{"v": "current"}'
     assert sorted(p.name for p in folder.iterdir()) == ["settings.local.json", "settings.local.json.bak-voiceover"]
 
@@ -284,12 +288,13 @@ def test_unreadable_settings_are_listed_not_crashed(fake_home, tmp_path, kind):
     path.mkdir() if kind == "directory" else path.write_text('{"hooks": ')
     result = run_cli(tmp_path, "--remove")
     assert result.returncode == 0 and "Traceback" not in result.stderr, result.stderr
-    assert "none found" in result.stdout and "Could not read" in result.stdout
+    assert "Could not read" in result.stdout
+    assert "no legacy setup found" not in result.stdout, "an unreadable file might still hold hooks"
 
 
 def test_empty_settings_file_is_not_reported(fake_home, tmp_path):
     (fake_home / ".claude" / "settings.local.json").write_text("\n")
-    assert run_cli(tmp_path).stdout == "none found\n"
+    assert run_cli(tmp_path).stdout == "no legacy setup found\n"
 
 
 def test_non_utf8_settings_keep_scripts_and_bytes(fake_home, tmp_path):
@@ -319,18 +324,137 @@ def test_failed_move_is_reported_and_summary_still_prints(fake_home, tmp_path, m
     assert (fake_home / ".claude" / "commands" / "speak.md").exists()
 
 
-def test_one_failing_settings_file_does_not_stop_the_next(fake_home, tmp_path):
-    bad = settings_with_hooks()
-    bad["env"]["NAME"] = "\ud800"  # loads fine, but can't be written back as UTF-8
-    (fake_home / ".claude" / "settings.json").write_text(json.dumps(bad))
+def run_main(monkeypatch, capsys, home, tmp_path, project, *args):
+    """legacy.main() in-process, so a test can patch it; returns stdout."""
+    monkeypatch.setattr(sys, "argv", ["legacy.py", *args, "--project", str(project)])
+    monkeypatch.setattr(legacy, "HOME", str(home))
+    monkeypatch.setattr(legacy, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(legacy.subprocess, "run", lambda *a, **k: None)  # never touch the real launchctl
+    legacy.main()
+    return capsys.readouterr().out
+
+
+def test_one_failing_settings_file_does_not_stop_the_next(fake_home, tmp_path, monkeypatch, capsys):
+    user = fake_home / ".claude" / "settings.json"
+    user.write_text(json.dumps(settings_with_hooks()))
     project = legacy_project(tmp_path)
     (project / "settings.local.json").write_text(json.dumps(settings_with_hooks()))
-    result = run_cli(project.parent, "--remove")
-    assert result.returncode == 0, result.stderr
-    assert "could not edit" in result.stdout
+    real_write = legacy.write_json_atomic
+
+    def fail_for_user(path, data):
+        if path == str(user.resolve()):
+            raise OSError(5, "Input/output error")
+        real_write(path, data)
+    monkeypatch.setattr(legacy, "write_json_atomic", fail_for_user)
+    out = run_main(monkeypatch, capsys, fake_home, tmp_path, project.parent, "--remove")
+    assert "could not edit" in out
     assert "UserPromptSubmit" not in json.loads((project / "settings.local.json").read_text())["hooks"]
     assert (project / "settings.local.json.bak-voiceover").exists()
+    assert not (fake_home / ".claude" / "settings.json.bak-voiceover").exists(), "failed edit leaves no backup"
     assert not (fake_home / ".claude" / "settings.json.bak-voiceover").exists()
+
+
+def test_bom_settings_are_cleaned(fake_home, tmp_path):
+    path = fake_home / ".claude" / "settings.json"
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps(settings_with_hooks()).encode())
+    result = run_cli(tmp_path, "--remove")
+    assert result.returncode == 0, result.stderr
+    assert "UserPromptSubmit" not in json.loads(path.read_text())["hooks"]
+    assert (fake_home / ".claude" / "settings.json.bak-voiceover").read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+def test_one_failed_move_does_not_stop_the_others(fake_home, tmp_path, monkeypatch, capsys):
+    hooks = fake_home / ".claude" / "hooks"
+    (hooks / "claude_speak.py").write_text("print()")
+    (hooks / "claude_speak.json").write_text("{}")
+    real_move = legacy.shutil.move
+
+    def fail_for_script(src, dst):
+        if src.endswith("claude_speak.py"):
+            raise PermissionError(13, "Permission denied", src)
+        return real_move(src, dst)
+    monkeypatch.setattr(legacy.shutil, "move", fail_for_script)
+    out = run_main(monkeypatch, capsys, fake_home, tmp_path, tmp_path, "--remove")
+    assert (hooks / "claude_speak.py").exists() and not (hooks / "claude_speak.json").exists()
+    assert "Could not move" in out and "files moved to" in out
+
+
+def test_unexpected_error_still_reports_what_was_done(fake_home, tmp_path, monkeypatch, capsys):
+    (fake_home / ".claude" / "settings.json").write_text(json.dumps(settings_with_hooks()))
+
+    def explode():
+        raise RuntimeError("boom")
+    monkeypatch.setattr(legacy, "legacy_files", explode)
+    out = run_main(monkeypatch, capsys, fake_home, tmp_path, tmp_path, "--remove")  # does not raise
+    assert "stopped early (RuntimeError: boom)" in out and "backup:" in out
+    assert "no legacy setup found" not in out
+
+
+def test_broken_pipe_while_reporting_does_not_raise(fake_home, tmp_path, monkeypatch, capsys):
+    def closed_pipe(*args):
+        raise BrokenPipeError(32, "Broken pipe")
+    monkeypatch.setattr(legacy, "report", closed_pipe)
+    run_main(monkeypatch, capsys, fake_home, tmp_path, tmp_path, "--remove")
+
+
+def test_deeply_nested_settings_are_unreadable_not_a_crash(fake_home, tmp_path):
+    project = legacy_project(tmp_path)
+    (project / "settings.json").write_text("[" * 200_000)
+    (fake_home / ".claude" / "hooks" / "claude_speak.py").write_text("print()")
+    result = run_cli(project.parent, "--remove")
+    assert result.returncode == 0 and "Traceback" not in result.stderr, result.stderr
+    assert "Could not read" in result.stdout and "RecursionError" in result.stdout
+    assert not (fake_home / ".claude" / "hooks" / "claude_speak.py").exists(), "the rest still ran"
+
+
+@pytest.mark.parametrize("kind", ["dev-zero", "fifo", "oversized"])
+def test_non_regular_or_huge_settings_are_not_read(fake_home, tmp_path, kind):
+    path = legacy_project(tmp_path) / "settings.json"
+    if kind == "dev-zero":  # git keeps symlinks, so a cloned repo can ship this
+        os.symlink("/dev/zero", path)
+    elif kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.write_bytes(b" " * legacy.MAX_SETTINGS_BYTES + b"{}")
+    result = run_cli(path.parent.parent)  # run_cli's timeout fails the test if it hangs
+    assert result.returncode == 0, result.stderr
+    assert "Could not read" in result.stdout
+    assert ("larger than 4 MB" if kind == "oversized" else "not a regular file") in result.stdout
+
+
+def make_login_item(home):
+    agents = home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    plist = agents / "local.claude-speak-menubar.plist"
+    plist.write_text("<plist/>")
+    menubar = home / ".claude" / "hooks" / "claude_speak_menubar.py"
+    menubar.write_text("print()")
+    return plist, menubar
+
+
+def test_login_item_is_unloaded_and_moved_with_its_script(fake_home, tmp_path, monkeypatch, capsys):
+    plist, menubar = make_login_item(fake_home)
+    out = run_main(monkeypatch, capsys, fake_home, tmp_path, tmp_path, "--remove")
+    assert not plist.exists() and not menubar.exists()
+    (backup,) = (tmp_path / "data").glob("legacy-backup-*")
+    assert sorted(p.name for p in backup.iterdir()) == ["claude_speak_menubar.py", plist.name]
+    assert "files moved to" in out
+
+
+def test_stuck_login_item_keeps_the_script_it_runs(fake_home, tmp_path, monkeypatch, capsys):
+    plist, menubar = make_login_item(fake_home)
+    (fake_home / ".claude" / "hooks" / "claude_speak.py").write_text("print()")
+    real_move = legacy.shutil.move
+
+    def fail_for_plist(src, dst):
+        if src.endswith(".plist"):
+            raise PermissionError(13, "Operation not permitted", src)
+        return real_move(src, dst)
+    monkeypatch.setattr(legacy.shutil, "move", fail_for_plist)
+    out = run_main(monkeypatch, capsys, fake_home, tmp_path, tmp_path, "--remove")
+    assert plist.exists() and menubar.exists(), "a login item must not be left pointing at a moved script"
+    assert not (fake_home / ".claude" / "hooks" / "claude_speak.py").exists()
+    assert "Could not move" in out and "the old login item still runs it" in out
 
 
 def test_project_through_symlinked_path_is_still_editable(fake_home, tmp_path):
