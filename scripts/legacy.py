@@ -8,6 +8,8 @@ Left in place, it speaks every response a second time. Removal is conservative:
   - files are moved into a timestamped backup folder, never deleted
   - every edited settings file is backed up first and rewritten atomically
   - a project's shared .claude/settings.json (usually committed) is only reported, never edited
+  - so is any settings file that is a symlink, and temp/backup files never follow symlinks,
+    so a cloned repo can't aim these writes at another file
 """
 import argparse
 import json
@@ -16,11 +18,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 LEGACY_HOOK = re.compile(r"claude_speak(?:_menubar)?\.py")
 LEGACY_PLIST_LABEL = "local.claude-speak-menubar"
 HOME = os.path.expanduser("~")
+DATA_DIR = os.path.expanduser(os.environ.get("CLAUDE_VOICEOVER_HOME", "~/.claude/voiceover"))
 
 
 def legacy_files():
@@ -45,7 +49,10 @@ def _mentions_legacy(path):
 
 
 def settings_files(project):
-    """(path, editable) pairs; the shared project settings.json is report-only."""
+    """(path, editable) pairs; the shared project settings.json and any symlink are report-only.
+
+    A symlinked settings file (e.g. planted by a cloned repo) could point at any file of the
+    user's, so it is never rewritten or backed up."""
     user = [(os.path.join(HOME, ".claude", n), True) for n in ("settings.json", "settings.local.json")]
     proj = [(os.path.join(project, ".claude", "settings.local.json"), True),
             (os.path.join(project, ".claude", "settings.json"), False)] if project else []
@@ -54,7 +61,7 @@ def settings_files(project):
         real = os.path.realpath(path)
         if real not in seen and os.path.exists(path):
             seen.add(real)
-            result.append((path, editable))
+            result.append((path, editable and not os.path.islink(path)))
     return result
 
 
@@ -85,12 +92,36 @@ def strip_legacy_hooks(data):
 
 
 def write_json_atomic(path, data):
-    tmp_path = f"{path}.voiceover-tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    shutil.copymode(path, tmp_path)
-    os.replace(tmp_path, path)
+    # mkstemp creates a fresh file (O_EXCL), so a planted symlink at a predictable temp
+    # name can't redirect the write to some other file.
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".voiceover-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        shutil.copymode(path, tmp_path)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def backup(path):
+    """Copy path to path.bak-voiceover without following a symlink planted at that name."""
+    target = path + ".bak-voiceover"
+    if os.path.isfile(target) and not os.path.islink(target):
+        os.remove(target)  # our own backup from an earlier run
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:  # something other than a regular file is there: don't touch it
+        fd, target = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(target) + ".")
+    with open(path, "rb") as src, os.fdopen(fd, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    shutil.copymode(path, target)
+    return target
 
 
 def main():
@@ -99,7 +130,7 @@ def main():
     parser.add_argument("--project", default=os.getcwd())
     args = parser.parse_args()
 
-    backup_dir = os.path.join(HOME, ".claude", "voiceover", "legacy-backup-" + time.strftime("%Y%m%d-%H%M%S"))
+    backup_dir = os.path.join(DATA_DIR, "legacy-backup-" + time.strftime("%Y%m%d-%H%M%S"))
     found, manual = [], []
 
     for path in legacy_files():
@@ -108,7 +139,8 @@ def main():
             if path.endswith(".plist"):
                 subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LEGACY_PLIST_LABEL}"],
                                capture_output=True)
-            os.makedirs(backup_dir, exist_ok=True)
+            os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
+            os.makedirs(backup_dir, mode=0o700, exist_ok=True)
             shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
 
     for path, editable in settings_files(args.project):
@@ -126,7 +158,7 @@ def main():
             continue
         found.append(label)
         if args.remove:
-            shutil.copy2(path, path + ".bak-voiceover")
+            backup(path)
             write_json_atomic(path, data)
 
     if not found and not manual:
@@ -139,7 +171,7 @@ def main():
             print("LEGACY SETUP FOUND - every response would be spoken twice. Re-run with --remove-legacy:")
         print("\n".join(f"  - {item}" for item in found))
     if manual:
-        print("Shared project settings (not edited automatically; remove the claude_speak hooks by hand):")
+        print("Shared project settings or symlinks (not edited automatically; remove the claude_speak hooks by hand):")
         print("\n".join(f"  - {item}" for item in manual))
 
 

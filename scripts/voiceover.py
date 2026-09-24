@@ -79,6 +79,10 @@ def clean_for_speech(text, max_chars=common.DEFAULTS["max_chars"], announce_code
     text = re.sub(r"(\*{1,2})(?=\S)([^*\n]{1,300}?)(?<=\S)\1", r"\2", text)     # *em* / **bold**
     text = re.sub(r"(?<!\w)(_{1,2})(?=\S)([^_\n]{1,300}?)(?<=\S)\1(?!\w)", r"\2", text)  # _em_, keeps snake_case
     text = re.sub(r"[~>]", "", text)                                            # strikethrough/quotes
+    # macOS speech treats [[...]] as engine commands ([[volm 0]], [[rate 700]]); a response
+    # quoting untrusted content must not be able to mute or garble the voice.
+    text = re.sub(r"\[\[[^\]\n]{0,100}\]\]", " ", text)
+    text = re.sub(r"\[(?=\[)", "[ ", text)                                        # stray [[ can't open one
     text = re.sub(r"\s+", " ", text).strip()
     if max_chars and len(text) > max_chars:
         text = text[:max_chars].rsplit(" ", 1)[0] + ". Response truncated."

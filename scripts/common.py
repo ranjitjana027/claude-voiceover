@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import time
 from contextlib import contextmanager
 
@@ -16,7 +17,7 @@ try:
 except ImportError:  # Windows: unsupported; voiceover.main() exits before anything needs it
     fcntl = None
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DATA_DIR = os.path.expanduser(os.environ.get("CLAUDE_VOICEOVER_HOME", "~/.claude/voiceover"))
 VENV_PYTHON = os.path.join(DATA_DIR, "venv", "bin", "python")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
@@ -55,17 +56,26 @@ def ensure_data_dir():
 
 def write_json_atomic(path, value):
     ensure_data_dir()
-    tmp_path = f"{path}.{os.getpid()}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(value, f, indent=2)
-    os.replace(tmp_path, path)  # readers never see half a file
+    # mkstemp: a fresh 0600 file (O_EXCL), never a symlink someone left at a guessable name
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, indent=2)
+        os.replace(tmp_path, path)  # readers never see half a file
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 @contextmanager
 def file_lock(name, timeout=None):
     """Exclusive advisory lock on <data dir>/<name>; raises LockTimeout instead of hanging."""
     ensure_data_dir()
-    with open(os.path.join(DATA_DIR, name), "w") as lock:
+    fd = os.open(os.path.join(DATA_DIR, name), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+") as lock:
         deadline = time.monotonic() + (LOCK_TIMEOUT_SECONDS if timeout is None else timeout)
         while True:
             try:

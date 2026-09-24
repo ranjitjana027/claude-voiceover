@@ -204,3 +204,30 @@ def test_launcher_kill_switch(tmp_path, monkeypatch):
     result = run_launcher(tmp_path, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                      "prompt": "/voiceover off"})
     assert result.stdout == ""
+
+
+# ---------- 0.2.1 security review ----------
+
+@pytest.mark.parametrize("text", ["hi [[volm 0]] there", "a [[rate 700]]b", "open [[inpt PHON", "x [[[ y", "[[[[volm 0]]]]"])
+def test_speech_engine_commands_are_stripped(text):
+    assert "[[" not in voiceover.clean_for_speech(text)
+
+
+def test_state_files_are_private_and_temp_names_are_not_followed(tmp_path):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("keep")
+    os.symlink(sentinel, f"{common.CONFIG_PATH}.{os.getpid()}.tmp")  # the pre-0.2.1 temp name
+    common.save_config(common.load_config())
+    assert sentinel.read_text() == "keep"
+    assert stat.S_IMODE(os.stat(common.CONFIG_PATH).st_mode) == 0o600
+    assert json.load(open(common.CONFIG_PATH))["rate"] == common.DEFAULTS["rate"]
+
+
+def test_lock_file_symlink_is_not_followed(tmp_path):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("keep")
+    os.symlink(sentinel, os.path.join(common.DATA_DIR, "sessions.lock"))
+    with pytest.raises(OSError):
+        with common.file_lock("sessions.lock"):
+            pass
+    assert sentinel.read_text() == "keep"

@@ -12,7 +12,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
 
-PACKAGES = ["pyttsx3"] + (["rumps"] if sys.platform == "darwin" else [])
+# Exact pins: a re-run never silently pulls a newer (possibly compromised) release.
+# Transitive dependencies (pyobjc on macOS) are not pinned.
+PACKAGES = ["pyttsx3==2.99"] + (["rumps==0.4.0"] if sys.platform == "darwin" else [])
 OLD_SETUP = [  # the pre-plugin, hand-rolled version of this tool
     "~/.claude/hooks/claude_speak.py",
     "~/.claude/hooks/claude_speak_menubar.py",
@@ -56,7 +58,7 @@ def install():
         run(sys.executable, "-m", "venv", os.path.dirname(os.path.dirname(common.VENV_PYTHON)))
 
     step(f"Installing {', '.join(PACKAGES)} (this is the slow part)")
-    run(common.VENV_PYTHON, "-m", "pip", "install", "--quiet", "--upgrade", "pip", *PACKAGES)
+    run(common.VENV_PYTHON, "-m", "pip", "install", "--quiet", *PACKAGES)
 
     if sys.platform.startswith("linux") and not shutil.which("espeak-ng"):
         step("WARNING: espeak-ng not found; install it (e.g. sudo apt install espeak-ng) or nothing will play")
