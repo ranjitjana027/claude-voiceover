@@ -7,7 +7,7 @@
       "name": "claude-voiceover",
       "source": "./",
       "description": "Reads Claude's final response aloud, with per-session on/off and a macOS menu bar app.",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ]
 }
