@@ -6,6 +6,26 @@ You can turn it on or off per session, and on macOS there's a menu bar app.
 
 ## Install
 
+**Easiest: ask Claude Code to do it.** Paste this into any session:
+
+```text
+Install the Claude Code plugin from https://github.com/ranjitjana027/claude-voiceover by following its INSTALL.md
+```
+
+Claude clones the repo, asks whether you want the menu bar app at login, and runs `scripts/install.sh`.
+The script adds the marketplace, installs the plugin for your user, sets up the speech engine and checks
+for leftovers. Then restart Claude Code.
+
+**By hand, with one command:**
+
+```bash
+git clone https://github.com/ranjitjana027/claude-voiceover && sh claude-voiceover/scripts/install.sh --menubar
+```
+
+Then restart Claude Code.
+
+**By hand, inside Claude Code:**
+
 ```text
 /plugin marketplace add ranjitjana027/claude-voiceover    # or a local clone: ~/Documents/claude-voiceover
 /plugin install claude-voiceover@claude-voiceover
