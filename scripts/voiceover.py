@@ -132,10 +132,11 @@ def voiceover_command(args, session_id, config):
         elif action == "default":
             entry["enabled"] = None
         on = common.session_enabled(entry, config)
-        source = "this session's setting" if entry["enabled"] is not None else "global default"
+        following_default = entry["enabled"] is None
     if not on:
         common.stop_speaker(session_id)
-    return f"Voice-over is {'ON' if on else 'OFF'} for this session ({source})."
+    note = " (following the global default)" if following_default else ""
+    return f"Voice-over is {'ON' if on else 'OFF'} for this session{note}."
 
 
 def setup_command(args):
@@ -183,6 +184,17 @@ def handle_command(match, data):
     return voiceover_command(args, data.get("session_id") or "unknown", common.load_config())
 
 
+def command_reply(message):
+    """Hook output that ends the turn before the model and shows only `message`.
+
+    continue/stopReason display as a plain note; decision "block" would wrap it in
+    "UserPromptSubmit operation blocked by hook: ... Original prompt: ...". The block
+    fields stay as a fallback for Claude Code versions that ignore `continue`.
+    """
+    return {"continue": False, "stopReason": message,
+            "decision": "block", "reason": message, "suppressOriginalPrompt": True}
+
+
 # ---------- hook events ----------
 
 def on_stop(data):
@@ -218,7 +230,7 @@ def on_user_prompt(data):
         except Exception as error:  # still answer, so the command never leaks to the model
             common.log(f"command failed: {error!r}")
             reason = f"Voice-over command failed: {error}. Details in {common.LOG_PATH}"
-        print(json.dumps({"decision": "block", "reason": reason}))
+        print(json.dumps(command_reply(reason)))
     elif session_id:
         try:
             with common.sessions_locked() as sessions:
