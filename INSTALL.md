@@ -16,15 +16,14 @@ item as persistence. They can still run the app any time with `/voiceover-menuba
 ## 2. Get the installer
 
 Use an existing local clone if the user has one in their own folders (for example `~/Documents/claude-voiceover`).
-Otherwise clone it into a fresh private temp directory:
-
-Run this as one command. It falls back to `gh` for a private repository, and prints the clone path only on success:
+Otherwise, clone it into a fresh private temp directory with this single command. It falls back to `gh` if
+`git clone` fails, and prints the clone path only on success:
 
 ```bash
-CLONE="$(mktemp -d)/claude-voiceover"
+TMP="$(mktemp -d)" && CLONE="$TMP/claude-voiceover" &&
 { git clone --depth 1 https://github.com/ranjitjana027/claude-voiceover "$CLONE" ||
   gh repo clone ranjitjana027/claude-voiceover "$CLONE" -- --depth 1; } && echo "$CLONE" ||
-  { rm -rf "$(dirname "$CLONE")"; echo "clone failed" >&2; false; }
+  { [ -n "$TMP" ] && rm -rf "$TMP"; echo "clone failed" >&2; false; }
 ```
 
 Shell variables may not survive between your commands, so use the printed path as `<clone>` from here on.
@@ -32,8 +31,8 @@ Shell variables may not survive between your commands, so use the printed path a
 Never run the installer from a directory that already existed under `/tmp` or `$TMPDIR` (such as
 `/tmp/claude-voiceover`): on a shared machine anyone can create one there. Always clone into a new `mktemp -d`.
 
-If it prints `clone failed` with an auth error, the repository is private and the user needs read access to it:
-tell them, and stop.
+If it prints `clone failed`: with an auth error, the repository is private and the user needs read access to it;
+otherwise `gh` may simply not be installed. Tell the user what the error said, and stop.
 
 ## 3. Run it
 
@@ -50,7 +49,7 @@ exactly as printed; don't try to work around it.
 
 ## 4. Legacy setup
 
-If the output says **LEGACY SETUP FOUND**, show the user the listed items and explain that they come from an
+If the output says **LEGACY SETUP FOUND** or lists **Shared, symlinked or unwritable settings**, show the user the listed items and explain that they come from an
 earlier hand-rolled version of this tool. If left in place, every response is spoken twice. Ask whether to
 remove them. If the user agrees, re-run with the flag:
 
@@ -61,12 +60,14 @@ sh <clone>/scripts/install.sh --remove-legacy [--menubar]
 This moves the listed files into a private `legacy-backup-<timestamp>/` folder (the output names it; by default
 under `~/.claude/voiceover/`) and unloads the old login item. From the settings files it removes only the hooks
 that run `claude_speak.py` or `claude_speak_menubar.py`. Each edited settings file is first backed up next to
-itself; the output gives each backup's path. A symlinked `~/.claude/settings.json` is edited at its real file.
+itself; the output gives each backup's path. A symlinked `~/.claude/settings.json` is edited at its real file,
+and its backup is written next to that file.
 
 A project's shared `.claude/settings.json` is usually committed to git, so it is **never edited**; neither is a
-project `settings.local.json` that is a symlink. If one has legacy hooks, the output lists it under "Shared or
-symlinked project settings", and the old `claude_speak*.py` scripts are left in place ("Left in place") so those
-hooks keep working. Tell the user, and offer to remove those hooks by hand only if they ask; once they are gone,
+project `settings.local.json` that is a symlink or sits in a symlinked `.claude` directory, nor any settings file
+that can't be written. If one has legacy hooks, the output lists it under "Shared, symlinked or unwritable
+settings", and the old `claude_speak*.py` scripts stay in place ("Will be left in place", or "Left in place" after
+`--remove-legacy`) so those hooks keep working. Files it could not read are listed under "Could not read". Tell the user, and offer to remove those hooks by hand only if they ask; once they are gone,
 re-running with `--remove-legacy` moves the scripts too.
 
 ## 5. Finish

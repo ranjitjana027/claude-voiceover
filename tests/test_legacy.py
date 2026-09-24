@@ -74,6 +74,8 @@ def test_cli_remove_backs_up_and_keeps_shared_settings(fake_home, tmp_path):
     # the shared settings.json still runs claude_speak.py, so moving it would break those hooks
     assert (fake_home / ".claude" / "hooks" / "claude_speak.py").exists()
     assert "Left in place" in result.stdout
+    assert f"backup: {project.resolve()}/settings.local.json.bak-voiceover)" in result.stdout
+    assert "settings backed up as" not in result.stdout
     local = json.loads((project / "settings.local.json").read_text())
     assert "UserPromptSubmit" not in local["hooks"] and local["env"]["NAME"] == "Rañjit"
     assert "Rañjit" in (project / "settings.local.json").read_text()  # no \u escapes
@@ -193,3 +195,74 @@ def test_failed_rewrite_leaves_settings_and_no_temp_file(tmp_path):
         legacy.write_json_atomic(str(settings), {"x": object()})
     assert settings.read_text() == '{"a": 1}'
     assert [p.name for p in folder.iterdir()] == ["settings.local.json"]
+
+
+def test_report_mode_says_scripts_will_be_left(fake_home, tmp_path):
+    (fake_home / ".claude" / "hooks" / "claude_speak.py").write_text("print()")
+    project = legacy_project(tmp_path)
+    (project / "settings.json").write_text(json.dumps(settings_with_hooks()))
+    out = run_cli(project.parent).stdout
+    script = str(fake_home / ".claude" / "hooks" / "claude_speak.py")
+    assert "Will be left in place" in out
+    assert out.index(script) > out.index("Will be left in place"), "listed as kept, not as to-be-moved"
+
+
+def test_unwritable_user_settings_are_reported_not_crashed(fake_home, tmp_path):
+    store = tmp_path / "store"  # e.g. a Nix home-manager link into a read-only store
+    store.mkdir()
+    (store / "settings.json").write_text(json.dumps(settings_with_hooks()))
+    os.symlink(store / "settings.json", fake_home / ".claude" / "settings.json")
+    (fake_home / ".claude" / "hooks" / "claude_speak.py").write_text("print()")
+    store.chmod(0o555)
+    (store / "settings.json").chmod(0o444)
+    try:
+        for args in ((), ("--remove",)):
+            result = run_cli(tmp_path, *args)
+            assert result.returncode == 0 and "Traceback" not in result.stderr, result.stderr
+            assert "not writable" in result.stdout and "not edited automatically" in result.stdout
+        assert json.loads((store / "settings.json").read_text()) == settings_with_hooks()
+        assert sorted(p.name for p in store.iterdir()) == ["settings.json"]
+        assert (fake_home / ".claude" / "hooks" / "claude_speak.py").exists(), "its hooks still need it"
+    finally:
+        store.chmod(0o755)
+
+
+def test_failed_rewrite_removes_its_backup_and_is_reported(fake_home, tmp_path, monkeypatch, capsys):
+    project = legacy_project(tmp_path)
+    settings = project / "settings.local.json"
+    settings.write_text(json.dumps(settings_with_hooks()))
+
+    def fail(path, data):
+        raise PermissionError(13, "Operation not permitted", path)
+    monkeypatch.setattr(legacy, "write_json_atomic", fail)
+    monkeypatch.setattr(sys, "argv", ["legacy.py", "--remove", "--project", str(project.parent)])
+    monkeypatch.setattr(legacy, "HOME", str(fake_home))
+    monkeypatch.setattr(legacy, "DATA_DIR", str(tmp_path / "data"))
+    legacy.main()
+    assert json.loads(settings.read_text()) == settings_with_hooks()
+    assert sorted(p.name for p in project.iterdir()) == ["settings.local.json"], "backup removed"
+    assert "could not edit" in capsys.readouterr().out
+
+
+def test_unreadable_settings_are_listed_not_crashed(fake_home, tmp_path):
+    (fake_home / ".claude" / "settings.json").write_bytes(b'{"hooks": "\xff\xfe"}')
+    result = run_cli(tmp_path, "--remove")
+    assert result.returncode == 0 and "Traceback" not in result.stderr, result.stderr
+    assert "Could not read" in result.stdout and "UnicodeDecodeError" in result.stdout
+
+
+def test_project_through_symlinked_path_is_still_editable(fake_home, tmp_path):
+    project = legacy_project(tmp_path)
+    (project / "settings.local.json").write_text(json.dumps(settings_with_hooks()))
+    alias = tmp_path / "alias"
+    os.symlink(project.parent, alias)
+    result = run_cli(alias, "--remove")
+    assert result.returncode == 0, result.stderr
+    assert "UserPromptSubmit" not in json.loads((project / "settings.local.json").read_text())["hooks"]
+    assert (project / "settings.local.json.bak-voiceover").exists()
+
+
+def test_settings_only_removal_names_no_backup_folder(fake_home, tmp_path):
+    (fake_home / ".claude" / "settings.json").write_text(json.dumps(settings_with_hooks()))
+    out = run_cli(tmp_path, "--remove").stdout
+    assert "Removed legacy setup:" in out and "files moved to" not in out

@@ -241,6 +241,8 @@ def on_user_prompt(data):
         try:
             with common.sessions_locked() as sessions:
                 common.touch_session(sessions, session_id, data.get("cwd"))
+        except common.LockUnsafe as error:
+            common.log(f"session bookkeeping skipped: {error}")
         except common.LockTimeout:
             pass  # bookkeeping only; never delay the user's prompt for it
 

@@ -6,14 +6,18 @@
 Left in place, it speaks every response a second time. Removal is conservative:
   - only hooks whose command runs claude_speak.py / claude_speak_menubar.py are removed
   - files are moved into a timestamped backup folder, never deleted
-  - every edited settings file is backed up first and rewritten atomically; a symlinked
-    user settings file (dotfiles) is edited at its real path, keeping the link
+  - every edited settings file is backed up next to itself first (replacing a backup from an
+    earlier run) and rewritten atomically; a symlinked user settings file (dotfiles) is edited
+    at its real path, keeping the link
   - a project's shared .claude/settings.json (usually committed) is only reported, never edited
-  - so is a project settings.local.json that resolves outside <project>/.claude: a cloned
-    repo could symlink it (or .claude itself) at any file of the user's
+  - so is a project settings.local.json that is not a plain file at <project>/.claude (it, or
+    .claude itself, is a symlink): a cloned repo could point it at any file of the user's
+  - so is any settings file we can't write (e.g. a dotfiles link into a read-only store)
   - temp and backup files are created fresh (O_EXCL/O_NOFOLLOW), never through a planted link
-  - while any report-only file still runs claude_speak*.py, those scripts stay in place, so
-    the remaining hooks keep working instead of failing on every event
+  - while any report-only file still runs claude_speak*.py, both scripts stay in place (the
+    rest is still moved), so the remaining hooks keep working instead of failing on every event
+  - a failure on one settings file is reported and the rest carry on; exit status stays 0,
+    because legacy cleanup is optional and must not abort the installer
 """
 import argparse
 import json
@@ -53,11 +57,12 @@ def _mentions_legacy(path):
 
 
 def settings_files(project):
-    """(path, editable) pairs, where path is the real file to read and rewrite.
+    """(path, editable) pairs. Editable entries give the resolved real path (the file that is
+    read and rewritten); report-only entries keep the path as given, for display.
 
     User settings are the user's own, so a symlink there (dotfiles) is followed. A project's
-    settings.local.json is editable only if it really lives in <project>/.claude; the shared
-    settings.json is always report-only."""
+    settings.local.json is editable only if its real path is exactly
+    <realpath(project)>/.claude/settings.local.json; the shared settings.json is always report-only."""
     user = [(os.path.join(HOME, ".claude", n), True) for n in ("settings.json", "settings.local.json")]
     proj = []
     if project:
@@ -90,7 +95,7 @@ def strip_legacy_hooks(data):
                     if not (isinstance(h, dict) and LEGACY_HOOK.search(str(h.get("command", ""))))]
             removed_here += len(group["hooks"]) - len(kept)
             group["hooks"] = kept
-        if removed_here:  # only tidy events we changed; leave everything else byte-for-byte
+        if removed_here:  # only tidy events we changed; other events keep their structure
             hooks[event] = [g for g in groups if not (isinstance(g, dict) and g.get("hooks") == [])]
             if not hooks[event]:
                 del hooks[event]
@@ -134,6 +139,25 @@ def backup(path):
     return target
 
 
+def writable(path):
+    return os.access(path, os.W_OK) and os.access(os.path.dirname(path), os.W_OK)
+
+
+def remove_hooks(path, data):
+    """Back up path, then rewrite it with data. Returns the backup path; on failure removes
+    the new backup and re-raises, so the file is either fully updated or untouched."""
+    saved = backup(path)
+    try:
+        write_json_atomic(path, data)
+    except BaseException:
+        try:
+            os.remove(saved)
+        except OSError:
+            pass
+        raise
+    return saved
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--remove", action="store_true")
@@ -141,25 +165,27 @@ def main():
     args = parser.parse_args()
 
     backup_dir = os.path.join(DATA_DIR, "legacy-backup-" + time.strftime("%Y%m%d-%H%M%S"))
-    found, manual, kept = [], [], []
+    found, manual, kept, unreadable, moved = [], [], [], [], False
 
     for path, editable in settings_files(args.project):
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError) as error:  # ValueError: bad JSON or bad UTF-8
+            unreadable.append(f"{path} ({error.__class__.__name__}: {error})")
             continue
         count = strip_legacy_hooks(data)
         if not count:
             continue
         label = f"{path} ({count} hook{'s' if count > 1 else ''}"
-        if not editable:
-            manual.append(label + ")")
-            continue
-        if args.remove:
-            label += f"; backup: {backup(path)}"
-            write_json_atomic(path, data)
-        found.append(label + ")")
+        if editable and not writable(path):
+            editable, label = False, label + "; not writable"
+        if editable and args.remove:
+            try:
+                label += f"; backup: {remove_hooks(path, data)}"
+            except OSError as error:
+                editable, label = False, label + f"; could not edit: {error}"
+        (found if editable else manual).append(label + ")")
 
     for path in legacy_files():
         if manual and LEGACY_HOOK.fullmatch(os.path.basename(path)):
@@ -173,24 +199,28 @@ def main():
             os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
             os.makedirs(backup_dir, mode=0o700, exist_ok=True)
             shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
+            moved = True
 
-    if not found and not manual:
+    if not (found or manual or unreadable):
         print("none found")
         return
     if found:
         if args.remove:
-            print(f"Removed legacy setup (files moved to {backup_dir}):")
+            print(f"Removed legacy setup (files moved to {backup_dir}):" if moved else "Removed legacy setup:")
         else:
             print("LEGACY SETUP FOUND - every response would be spoken twice. Re-run with --remove-legacy:")
         print("\n".join(f"  - {item}" for item in found))
     if manual:
-        print("Shared or symlinked project settings (not edited automatically; "
+        print("Shared, symlinked or unwritable settings (not edited automatically; "
               "remove the claude_speak hooks by hand):")
         print("\n".join(f"  - {item}" for item in manual))
     if kept:
         print(f"{'Left' if args.remove else 'Will be left'} in place because those hooks still run them "
               "(re-run once the hooks are gone):")
         print("\n".join(f"  - {item}" for item in kept))
+    if unreadable:
+        print("Could not read (skipped; check these by hand for claude_speak hooks):")
+        print("\n".join(f"  - {item}" for item in unreadable))
 
 
 if __name__ == "__main__":

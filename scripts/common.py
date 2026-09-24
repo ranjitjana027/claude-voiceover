@@ -52,7 +52,8 @@ class LockTimeout(Exception):
 
 
 class LockUnsafe(LockTimeout):
-    """The lock path is a symlink. Callers treat it like a busy lock; the message says how to fix it."""
+    """Raised when the lock path is a symlink. A LockTimeout subclass, so callers that fall back
+    on a busy lock fall back here too; the message says how to fix it."""
 
 
 def ensure_data_dir():
@@ -62,7 +63,7 @@ def ensure_data_dir():
 def write_json_atomic(path, value):
     ensure_data_dir()
     # mkstemp: a fresh 0600 file (O_EXCL), never a symlink someone left at a guessable name;
-    # the file it replaces ends up 0600 too (sessions.json lists project paths)
+    # after the replace the file at path is 0600 (sessions.json lists project paths)
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

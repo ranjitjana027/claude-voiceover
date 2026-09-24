@@ -266,3 +266,43 @@ def test_lock_file_is_private():
     with common.file_lock("x.lock"):
         pass
     assert stat.S_IMODE(os.stat(os.path.join(common.DATA_DIR, "x.lock")).st_mode) == 0o600
+
+
+def test_symlinked_speaker_lock_skips_speech_without_raising(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setitem(sys.modules, "pyttsx3", type(sys)("pyttsx3"))
+    sys.modules["pyttsx3"].init = lambda: calls.append("init")
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
+    voiceover.speak("hi", common.load_config(), "A")
+    assert calls == []
+    log = open(common.LOG_PATH).read()
+    assert "not speaking" in log and "is a symlink" in log
+
+
+def test_setup_reports_symlinked_lock_not_already_running(tmp_path, monkeypatch, capsys):
+    import setup
+    installs = []
+    monkeypatch.setattr(setup, "install", lambda: installs.append(1))
+    os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "setup.lock"))
+    with pytest.raises(SystemExit):
+        setup.main()
+    out = capsys.readouterr().out
+    assert "is a symlink" in out and "already running" not in out and installs == []
+
+
+def test_setup_installs_pinned_packages_without_upgrading(monkeypatch):
+    import setup
+    calls = []
+    monkeypatch.setattr(setup, "run", lambda *cmd: calls.append(cmd))
+    setup.install()
+    (pip,) = [c for c in calls if "pip" in c]
+    assert pip == (common.VENV_PYTHON, "-m", "pip", "install", "--quiet", *setup.PACKAGES)
+
+
+def test_failed_state_write_keeps_old_file_and_leaves_no_temp(tmp_path):
+    common.save_config(common.load_config())
+    before = open(common.CONFIG_PATH).read()
+    with pytest.raises(TypeError):
+        common.write_json_atomic(common.CONFIG_PATH, {"x": object()})
+    assert open(common.CONFIG_PATH).read() == before
+    assert not list(tmp_path.glob(".*.tmp"))

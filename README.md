@@ -104,7 +104,8 @@ Everything lives in `~/.claude/voiceover/`, which plugin updates don't touch:
 | `legacy-backup-*/` | Files moved aside by `install.sh --remove-legacy` |
 | `setup.log`, `voiceover.log`, `menubar.log` | Diagnostics, capped at 256 KB each; voice-over never raises errors into Claude Code |
 
-The folder is private (`700`) because `sessions.json` lists your project paths.
+The folder is private (`700`) because `sessions.json` lists your project paths. `--remove-legacy` also leaves a
+`<settings file>.bak-voiceover` backup next to each settings file it edits.
 
 ## Safety
 
