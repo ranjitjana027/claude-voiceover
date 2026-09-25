@@ -20,7 +20,12 @@ def run_hook(monkeypatch, capsys, payload):
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     voiceover.main()
     out = capsys.readouterr().out.strip()
-    return json.loads(out) if out else None
+    reply = json.loads(out) if out else None
+    if reply and "hookSpecificOutput" in reply:  # command reply: expose the relayed message
+        context = reply["hookSpecificOutput"]["additionalContext"]
+        assert context.startswith(voiceover.REPLY_PREFIX)
+        reply["reason"] = context[len(voiceover.REPLY_PREFIX):]
+    return reply
 
 
 def prompt(session_id, text):
@@ -85,7 +90,7 @@ def test_command_regex_ignores_other_prompts(text):
 
 def test_session_off_mutes_only_that_session(monkeypatch, capsys, spoken):
     reply = run_hook(monkeypatch, capsys, prompt("A", "/voiceover off"))
-    assert reply["continue"] is False and reply["stopReason"] == reply["reason"] == "Voice-over is OFF for this session."
+    assert reply["reason"] == "Voice-over is OFF for this session."
     run_hook(monkeypatch, capsys, stop("A", "muted"))
     run_hook(monkeypatch, capsys, stop("B", "B talks"))
     assert spoken == [("B talks", "B")]
@@ -183,8 +188,9 @@ def test_env_kill_switch(monkeypatch, capsys, spoken):
     assert spoken == []
 
 
-def test_command_reply_ends_turn_without_block_wrapper(monkeypatch, capsys, spoken):
+def test_command_reply_is_relayed_without_hook_prefix(monkeypatch, capsys, spoken):
     reply = run_hook(monkeypatch, capsys, prompt("A", "/claude-voiceover:voiceover on"))
-    assert reply["continue"] is False  # the prompt never reaches the model
-    assert reply["stopReason"] == "Voice-over is ON for this session."
-    assert reply["suppressOriginalPrompt"] is True  # fallback path: don't echo the prompt
+    # no continue/decision: those make Claude Code prefix "Operation stopped by hook:"
+    assert not {"continue", "stopReason", "decision"} & reply.keys()
+    assert reply["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert reply["reason"] == "Voice-over is ON for this session."

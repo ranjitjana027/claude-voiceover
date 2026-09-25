@@ -22,7 +22,12 @@ def run_hook(monkeypatch, capsys, payload):
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     voiceover.main()
     out = capsys.readouterr().out.strip()
-    return json.loads(out) if out else None
+    reply = json.loads(out) if out else None
+    if reply and "hookSpecificOutput" in reply:  # command reply: expose the relayed message
+        context = reply["hookSpecificOutput"]["additionalContext"]
+        assert context.startswith(voiceover.REPLY_PREFIX)
+        reply["reason"] = context[len(voiceover.REPLY_PREFIX):]
+    return reply
 
 
 @pytest.fixture
@@ -110,7 +115,7 @@ def test_command_failure_still_blocks_with_message(monkeypatch, capsys):
     monkeypatch.setattr(menubar_ctl, "command", boom)
     reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                            "prompt": "/voiceover-menubar start"})
-    assert reply["decision"] == "block" and "launchctl exploded" in reply["reason"]
+    assert "launchctl exploded" in reply["reason"]
 
 
 def test_setup_refuses_to_run_twice(monkeypatch, capsys):
@@ -196,7 +201,8 @@ def test_launcher_before_setup_ignores_ordinary_events(tmp_path):
 def test_launcher_before_setup_answers_voiceover_commands(tmp_path):
     result = run_launcher(tmp_path, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                      "prompt": "/voiceover off"})
-    assert json.loads(result.stdout)["reason"] == voiceover.SETUP_HINT
+    context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert context == voiceover.REPLY_PREFIX + voiceover.SETUP_HINT
 
 
 def test_launcher_kill_switch(tmp_path, monkeypatch):
@@ -259,7 +265,7 @@ def test_symlinked_setup_lock_gives_an_actionable_reply(tmp_path, monkeypatch, c
     os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "setup.lock"))
     reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                            "prompt": "/voiceover-setup"})
-    assert reply["stopReason"].startswith("Setup can't start:") and "delete it" in reply["stopReason"]
+    assert reply["reason"].startswith("Setup can't start:") and "delete it" in reply["reason"]
 
 
 def test_lock_file_is_private():
@@ -312,8 +318,8 @@ def test_status_warns_when_speaker_lock_is_broken(tmp_path, monkeypatch, capsys)
     os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
     reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                            "prompt": "/voiceover status"})
-    assert "Nothing will be spoken until this is fixed" in reply["stopReason"]
-    assert "speaker.lock is a symlink" in reply["stopReason"]
+    assert "Nothing will be spoken until this is fixed" in reply["reason"]
+    assert "speaker.lock is a symlink" in reply["reason"]
 
 
 @pytest.fixture
@@ -380,4 +386,4 @@ def test_no_speaker_warning_when_voiceover_is_off(tmp_path, monkeypatch, capsys)
     os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "speaker.lock"))
     reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                            "prompt": "/voiceover off"})
-    assert reply["stopReason"] == "Voice-over is OFF for this session."
+    assert reply["reason"] == "Voice-over is OFF for this session."

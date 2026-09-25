@@ -45,8 +45,8 @@ Requirements: Python 3.9+ (`python3`). On Linux you also need `espeak-ng`. The m
 
 ## Commands
 
-The plugin's hook handles these commands directly, so they never reach the model. They take effect
-instantly and use no tokens. Each also works fully qualified, for example `/claude-voiceover:voiceover off`.
+The plugin's hook applies these commands itself, before the model runs; Claude only repeats the
+result as its reply (one short, tool-free turn). Each also works fully qualified, for example `/claude-voiceover:voiceover off`.
 
 | Command | What it does |
 |---|---|
@@ -121,8 +121,8 @@ file is a symlink), or `<settings file>.bak-voiceover.<random>` if that name is 
   2 s. Before setup has run, ordinary events don't even start Python.
 - **Cheap text cleaning.** Only a bounded amount of text is cleaned, with bounded patterns, so a huge
   response costs milliseconds.
-- **Commands never leak.** A `/voiceover…` command has to be the entire prompt, on one line; anything
-  longer goes to Claude untouched. A failed command still gets an answer instead of reaching the model.
+- **Commands are exact.** A `/voiceover…` command has to be the entire prompt, on one line; anything
+  longer goes to Claude untouched. A failed command still reports why.
 - **Quiet elsewhere.** On Windows it's a silent no-op. Set `CLAUDE_VOICEOVER=0` to turn everything off.
 
 ## Uninstall
