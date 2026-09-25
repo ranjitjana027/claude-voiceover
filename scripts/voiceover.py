@@ -6,9 +6,9 @@ claude-voiceover hook entrypoint (Stop, UserPromptSubmit, SessionEnd).
   UserPromptSubmit  stop this session's speech; handle the plugin's slash commands
   SessionEnd        forget the session
 
-Slash commands are intercepted here and blocked, so they never reach the model:
-they apply instantly and cost no tokens. A command must be the whole prompt, on
-one line; anything longer goes to Claude untouched.
+Slash commands are applied here, before the model runs; Claude only repeats the
+result (see command_reply). A command must be the whole prompt, on one line;
+anything longer goes to Claude untouched.
 
   /voiceover [on|off|toggle|default|status]   this session
   /voiceover global [on|off]                  default for sessions without an override
@@ -30,6 +30,8 @@ import menubar_ctl  # noqa: E402
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # Plugin commands can be typed bare (/voiceover) or qualified (/claude-voiceover:voiceover).
 COMMAND = re.compile(r"/(?:claude-voiceover:)?voiceover(?:-(menubar|setup))?(?:[ \t]+([^\n]*?))?[ \t]*", re.I)
+REPLY_PREFIX = ("The claude-voiceover hook already handled this command. Reply with exactly the "
+                "message below, word for word, and nothing else. Do not run any tools.\n\n")
 SETUP_HINT = "Voice-over isn't set up yet. Run /voiceover-setup once (about a minute), then restart Claude Code."
 # Cleaning runs on at most this much text, so a huge response can't cost more than a few ms.
 CLEAN_INPUT_LIMIT = 20_000
@@ -193,14 +195,14 @@ def handle_command(match, data):
 
 
 def command_reply(message):
-    """Hook output that ends the turn before the model and shows only `message`.
+    """Hook output that lets Claude relay `message` as its whole reply.
 
-    continue/stopReason display as a plain note; decision "block" would wrap it in
-    "UserPromptSubmit operation blocked by hook: ... Original prompt: ...". The block
-    fields stay as a fallback for Claude Code versions that ignore `continue`.
+    The command is already applied; the model only echoes the result. Ending the turn
+    from the hook instead (continue: false, or decision "block") makes Claude Code
+    prefix the message with "Operation stopped by hook:" / "...blocked by hook:".
     """
-    return {"continue": False, "stopReason": message,
-            "decision": "block", "reason": message, "suppressOriginalPrompt": True}
+    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                   "additionalContext": REPLY_PREFIX + message}}
 
 
 # ---------- hook events ----------
@@ -235,7 +237,7 @@ def on_user_prompt(data):
     if match:
         try:
             reason = handle_command(match, data)
-        except Exception as error:  # still answer, so the command never leaks to the model
+        except Exception as error:  # still answer, so Claude has a result to relay
             common.log(f"command failed: {error!r}")
             reason = f"Voice-over command failed: {error}. Details in {common.LOG_PATH}"
         print(json.dumps(command_reply(reason)))
