@@ -93,6 +93,18 @@ def test_real_speaker_is_recognised_and_stopped():
         speaker.kill()
 
 
+def test_long_command_line_is_not_truncated_by_terminal_width(monkeypatch):
+    # ps cuts its output at $COLUMNS; the plugin cache path easily pushes "voiceover" past that
+    monkeypatch.setenv("COLUMNS", "80")
+    speaker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)  # " + "p" * 100, "voiceover"])
+    try:
+        time.sleep(0.2)
+        assert common.process_command(speaker.pid).endswith(" voiceover")
+    finally:
+        speaker.kill()
+        speaker.wait()
+
+
 # ---------- CPU: huge responses clean quickly ----------
 
 @pytest.mark.parametrize("name, text", [

@@ -1,8 +1,23 @@
 # claude-voiceover
 
-A Claude Code plugin that reads Claude's final response aloud. It runs fully locally with
-[pyttsx3](https://pypi.org/project/pyttsx3/), so there are no API keys and nothing leaves your machine.
-You can turn it on or off per session, and on macOS there's a menu bar app.
+[![Tests](https://github.com/ranjitjana027/claude-voiceover/actions/workflows/tests.yml/badge.svg)](https://github.com/ranjitjana027/claude-voiceover/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+
+A [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin that reads Claude's final response aloud.
+Start a long task, look away, and hear the answer when it's done.
+
+- **Fully local.** Speech runs on your machine with [pyttsx3](https://pypi.org/project/pyttsx3/)
+  (macOS system voices, or `espeak-ng` on Linux). No API keys, no network calls, nothing leaves your machine.
+- **Per-session control.** `/voiceover off` silences one session while the others keep talking, and a global
+  default covers the rest.
+- **Speaks prose, not code.** Code blocks, tables, URLs and Markdown markup are stripped before speaking.
+- **Stays out of the way.** Commands apply instantly in the hook, a prompt costs about 70 ms, one voice plays
+  at a time, and errors are logged, never raised into Claude Code.
+- **macOS menu bar app** (optional) to toggle sessions and pick the voice, rate and volume.
+
+> This is a community project. It is not made by, affiliated with, or endorsed by Anthropic.
 
 ## Install
 
@@ -41,7 +56,14 @@ Then restart Claude Code.
    in the background. You'll hear "Voice-over is ready" when it's done.
 3. That's it. Every response is now spoken. Setup is global and covers every project and session.
 
-Requirements: Python 3.9+ (`python3`). On Linux you also need `espeak-ng`. The menu bar app is macOS only.
+### Requirements
+
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Voice-over | ✅ | ✅ with `espeak-ng` (`sudo apt install espeak-ng`) | ❌ silent no-op |
+| Menu bar app | ✅ | ❌ | ❌ |
+
+You also need Claude Code and Python 3.9+ on your `PATH` as `python3`.
 
 ## Commands
 
@@ -134,16 +156,40 @@ file is a symlink), or `<settings file>.bak-voiceover.<random>` if that name is 
 
 Then delete `~/.claude/voiceover/`.
 
+## How it works
+
+The plugin registers three hooks (`hooks/hooks.json`), all running `scripts/run.sh` → `scripts/voiceover.py`,
+which dispatches on `hook_event_name`:
+
+- **UserPromptSubmit** applies `/voiceover…` commands and stops any speech still playing from this session.
+- **Stop** (async) cleans up Claude's final message and speaks it in a detached process.
+- **SessionEnd** removes the session's override.
+
+| File | Role |
+|---|---|
+| `scripts/voiceover.py` | Hook dispatcher, command handling, text cleaning, speaker process |
+| `scripts/common.py` | Paths, config, locking, safe process signalling |
+| `scripts/setup.py` | Creates the private virtualenv with pinned dependencies |
+| `scripts/menubar.py`, `scripts/menubar_ctl.py` | macOS menu bar app and its LaunchAgent control |
+| `scripts/install.sh`, `scripts/legacy.py` | One-shot installer and legacy-setup cleanup |
+
 ## Development
 
 ```bash
+git clone https://github.com/ranjitjana027/claude-voiceover && cd claude-voiceover
 python3 -m venv .venv && .venv/bin/pip install pytest
 .venv/bin/python -m pytest -q
 claude plugin validate .
 ```
 
-Hook entrypoint: `scripts/run.sh` → `scripts/voiceover.py`, which dispatches on `hook_event_name`.
+To try your changes in Claude Code, install from your clone:
+`claude plugin marketplace add ./ && claude plugin install claude-voiceover@claude-voiceover`, then restart Claude Code.
+
+## Contributing
+
+Bug reports, fixes and ideas are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) to get started, and
+[SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
 ## License
 
-MIT
+[MIT](LICENSE) © Ranjit Jana

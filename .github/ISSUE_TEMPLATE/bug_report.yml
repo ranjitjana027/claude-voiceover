@@ -1,0 +1,39 @@
+name: Bug report
+description: Something isn't working as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: macOS 15.3 / Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `python3 --version` and `claude --version`, and the plugin version.
+      placeholder: Python 3.12.4, Claude Code 2.x, claude-voiceover 0.2.1
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: /voiceover status output
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        Last lines of `~/.claude/voiceover/voiceover.log` (and `setup.log` or `menubar.log` if relevant).
+        Trim any private project paths.
+      render: text

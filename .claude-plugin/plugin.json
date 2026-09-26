@@ -1,8 +1,22 @@
 {
   "name": "claude-voiceover",
   "version": "0.2.1",
-  "description": "Reads Claude's final response aloud, with per-session on/off and a macOS menu bar app. Fully local (pyttsx3), no API keys.",
-  "author": { "name": "Ranjit Jana" },
+  "description": "Reads Claude's final response aloud, fully locally (pyttsx3, no API keys). Per-session on/off and a macOS menu bar app.",
+  "author": {
+    "name": "Ranjit Jana",
+    "url": "https://github.com/ranjitjana027"
+  },
+  "homepage": "https://github.com/ranjitjana027/claude-voiceover",
+  "repository": "https://github.com/ranjitjana027/claude-voiceover",
   "license": "MIT",
-  "keywords": ["tts", "voice", "speech", "accessibility", "menubar"]
+  "keywords": [
+    "tts",
+    "text-to-speech",
+    "voice",
+    "speech",
+    "accessibility",
+    "menubar",
+    "offline",
+    "pyttsx3"
+  ]
 }
