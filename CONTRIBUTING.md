@@ -36,6 +36,8 @@ the tests never touch it.
 
 - Keep each PR focused on one change, and add or update tests in `tests/` for behaviour changes.
 - Make sure `pytest` and `claude plugin validate .` pass. CI runs the tests on Linux and macOS.
+- Maintainers can add the `claude-review` label to a PR from a branch in this repo to get an automated Claude Code
+  review (PRs from forks are skipped).
 - Hooks run on every prompt, so keep them fast and quiet: no output on a normal prompt, no new network calls,
   and never raise errors into Claude Code (log them instead).
 - New Python dependencies must be pinned (`name==version`) in `scripts/setup.py`.
