@@ -54,6 +54,8 @@ def test_manifest_versions_match():
     with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json"), encoding="utf-8") as f:
         listed = {p["name"]: p for p in json.load(f)["plugins"]}
     assert listed[plugin["name"]]["version"] == plugin["version"]
+    import common
+    assert common.VERSION == plugin["version"]  # the login item compares its copy against this
 
 
 def test_dependencies_are_pinned():

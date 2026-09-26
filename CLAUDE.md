@@ -30,8 +30,8 @@ Run both before every commit. CI (`.github/workflows/tests.yml`) runs pytest on 
 - Only signal processes after verifying their command line (see `common.py`); never trust a pid file alone.
 - Files the plugin needs at runtime must be committed, and `scripts/run.sh` / `scripts/install.sh` stay executable
   (`tests/test_packaging.py` enforces this).
-- A release bumps `version` in both `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (a test checks
-  they match) and moves the CHANGELOG "Unreleased" entries under the new version.
+- A release bumps `version` in `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and `VERSION` in
+  `scripts/common.py` (a test checks they match) and moves the CHANGELOG "Unreleased" entries under the new version.
 - Behaviour changes need tests and README updates. Keep INSTALL.md in sync with `scripts/install.sh`: it is read
   by Claude Code when a user asks it to install the plugin.
 - Commit messages use Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`).
