@@ -31,8 +31,7 @@ Shell variables may not survive between your commands, so use the printed path a
 Never run the installer from a directory that already existed under `/tmp` or `$TMPDIR` (such as
 `/tmp/claude-voiceover`): on a shared machine anyone can create one there. Always clone into a new `mktemp -d`.
 
-If it prints `clone failed`: with an auth error, the repository is private and the user needs read access to it;
-otherwise (for example `gh: command not found` or a network error) tell the user what the error said, and stop.
+If it prints `clone failed` (for example a network or proxy error), tell the user what the error said, and stop.
 
 ## 3. Run it
 
@@ -98,7 +97,7 @@ from Claude Code's plugin cache, not from the clone.
 
 | Symptom | Fix |
 |---|---|
-| `marketplace add` fails with an auth error | The repo is private; the user needs git access (SSH key or `gh auth login`) |
+| `marketplace add` fails with a network error | Check the connection or proxy, or install from a local clone with `--source <path>` |
 | Setup `FAILED:` line mentions pip | Network or proxy issue; re-run the installer once it's fixed |
 | No sound after restart | `/voiceover status`; then check `~/.claude/voiceover/voiceover.log` |
 | Commands reach the model instead of applying instantly | Claude Code wasn't restarted after install |

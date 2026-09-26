@@ -1,13 +1,27 @@
 {
   "name": "claude-voiceover",
-  "owner": { "name": "Ranjit Jana" },
+  "owner": {
+    "name": "Ranjit Jana",
+    "url": "https://github.com/ranjitjana027"
+  },
   "description": "Local, key-free voice-over for Claude Code responses.",
   "plugins": [
     {
       "name": "claude-voiceover",
       "source": "./",
-      "description": "Reads Claude's final response aloud, with per-session on/off and a macOS menu bar app.",
-      "version": "0.2.1"
+      "description": "Reads Claude's final response aloud, fully locally, with per-session on/off and a macOS menu bar app.",
+      "version": "0.2.1",
+      "author": {
+        "name": "Ranjit Jana"
+      },
+      "homepage": "https://github.com/ranjitjana027/claude-voiceover",
+      "license": "MIT",
+      "category": "accessibility",
+      "tags": [
+        "tts",
+        "voice",
+        "accessibility"
+      ]
     }
   ]
 }
