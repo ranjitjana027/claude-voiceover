@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ## Unreleased
 
+- Fix: on Linux with `COLUMNS` set, a long command line was cut off by `ps`, so a new prompt failed to stop
+  speech still playing (`ps -ww`).
 - Relay `/voiceover` replies without the "hook stopped" prefix.
 - Open-source project files: contributing guide, security policy, issue templates and CI.
 

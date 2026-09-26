@@ -174,7 +174,7 @@ def session_enabled(entry, config):
 
 def process_command(pid):
     try:
-        result = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+        result = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)],
                                 capture_output=True, text=True, timeout=2)
     except (OSError, subprocess.SubprocessError):
         return ""
