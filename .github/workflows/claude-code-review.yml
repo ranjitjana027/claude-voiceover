@@ -1,13 +1,17 @@
 name: Claude Code Review
 
+# Runs only when the "claude-review" label is added to a PR (needs triage or write access).
+# To review again after new pushes, remove the label and add it back.
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [labeled]
 
 jobs:
   review:
     # Secrets aren't available to PRs from forks, so only review same-repo branches.
-    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    if: >-
+      github.event.label.name == 'claude-review' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read

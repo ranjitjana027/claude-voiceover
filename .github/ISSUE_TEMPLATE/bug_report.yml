@@ -21,7 +21,7 @@ body:
     attributes:
       label: Versions
       description: Output of `python3 --version` and `claude --version`, and the plugin version.
-      placeholder: Python 3.12.4, Claude Code 2.x, claude-voiceover 0.2.1
+      placeholder: Python 3.12.4, Claude Code 2.x, claude-voiceover 0.2.2
     validations:
       required: true
   - type: textarea

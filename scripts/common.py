@@ -18,7 +18,7 @@ try:
 except ImportError:  # Windows: unsupported; voiceover.main() exits before anything needs it
     fcntl = None
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 DATA_DIR = os.path.expanduser(os.environ.get("CLAUDE_VOICEOVER_HOME", "~/.claude/voiceover"))
 VENV_PYTHON = os.path.join(DATA_DIR, "venv", "bin", "python")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
