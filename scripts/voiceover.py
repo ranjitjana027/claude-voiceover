@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-voiceover hook entrypoint (Stop, UserPromptSubmit, SessionEnd).
+claude-voiceover hook entrypoint for Claude Code (Stop, UserPromptSubmit, SessionEnd).
 
   Stop              speak Claude's final response if voice-over is on for this session
   UserPromptSubmit  stop this session's speech; handle the plugin's slash commands
@@ -15,6 +15,9 @@ anything longer goes to Claude untouched.
   /voiceover-menubar [start|stop|enable|disable|status]
   /voiceover-setup [status|uninstall]
 
+This is the Claude Code adapter: it parses Claude's hook payloads and owns the slash
+commands and reply format; the agent-neutral behaviour lives in core.py and speech.py.
+
 Standard library only at import time; pyttsx3 is imported when speaking.
 """
 import json
@@ -25,7 +28,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
+import core  # noqa: E402
 import menubar_ctl  # noqa: E402
+# Re-exported for setup.py, menubar.py's voice test and older tests. core calls speech.speak,
+# so patch speech.speak (not voiceover.speak) to intercept hook speech.
+from speech import clean_for_speech, speak  # noqa: E402,F401
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # Plugin commands can be typed bare (/voiceover) or qualified (/claude-voiceover:voiceover).
@@ -33,8 +40,6 @@ COMMAND = re.compile(r"/(?:claude-voiceover:)?voiceover(?:-(menubar|setup))?(?:[
 REPLY_PREFIX = ("The claude-voiceover hook already handled this command. Reply with exactly the "
                 "message below, word for word, and nothing else. Do not run any tools.\n\n")
 SETUP_HINT = "Voice-over isn't set up yet. Run /voiceover-setup once (about a minute), then restart Claude Code."
-# Cleaning runs on at most this much text, so a huge response can't cost more than a few ms.
-CLEAN_INPUT_LIMIT = 20_000
 
 
 def match_command(prompt):
@@ -66,85 +71,22 @@ def last_message_from_transcript(path):
     return text
 
 
-def clean_for_speech(text, max_chars=common.DEFAULTS["max_chars"], announce_code=True):
-    # Cut first: every pattern below is bounded, but there is no reason to scan a 1 MB log.
-    limit = min(max_chars * 4, CLEAN_INPUT_LIMIT) if max_chars else CLEAN_INPUT_LIMIT
-    text = text[:limit]
-    code_placeholder = " (code block omitted) " if announce_code else " "
-    text = re.sub(r"```.*?(?:```|$)", code_placeholder, text, flags=re.S)       # fenced (even unclosed)
-    text = re.sub(r"`([^`\n]*)`", r"\1", text)                                   # inline code
-    text = re.sub(r"\[([^\]\n]{1,300})\]\([^)\s]{1,2000}\)", r"\1", text)        # links -> label
-    text = re.sub(r"https?://\S+", " link ", text)                              # bare URLs
-    text = re.sub(r"^[ \t]*\|[^\n]*\|[ \t]*$", "", text, flags=re.M)            # tables
-    text = re.sub(r"^[ \t]*#{1,6}[ \t]*", "", text, flags=re.M)                 # headers
-    text = re.sub(r"^[ \t]*[-*+][ \t]+", "", text, flags=re.M)                  # bullets
-    text = re.sub(r"(\*{1,2})(?=\S)([^*\n]{1,300}?)(?<=\S)\1", r"\2", text)     # *em* / **bold**
-    text = re.sub(r"(?<!\w)(_{1,2})(?=\S)([^_\n]{1,300}?)(?<=\S)\1(?!\w)", r"\2", text)  # _em_, keeps snake_case
-    text = re.sub(r"[~>]", "", text)                                            # strikethrough/quotes
-    # macOS speech may treat [[...]] as engine commands ([[volm 0]], [[rate 700]]); a response
-    # quoting untrusted content must not be able to mute or garble the voice.
-    text = re.sub(r"\[\[[^\]\n]{0,100}\]\]", " ", text)
-    text = re.sub(r"\[(?=\[)", "[ ", text)                                        # stray [[ can't open one
-    text = re.sub(r"\s+", " ", text).strip()
-    if max_chars and len(text) > max_chars:
-        text = text[:max_chars].rsplit(" ", 1)[0] + ". Response truncated."
-    return text
-
-
-def speak(text, config, session_id=None):
-    try:
-        import pyttsx3
-    except ImportError:
-        common.log("pyttsx3 missing; run /voiceover-setup")
-        return
-    try:
-        common.claim_speaker(session_id)  # one voice at a time across all sessions
-    except common.LockTimeout as error:
-        common.log(f"not speaking: {error}")
-        return
-    try:
-        engine = pyttsx3.init()
-        engine.setProperty("rate", config["rate"])
-        engine.setProperty("volume", config["volume"])
-        if config["voice"]:
-            engine.setProperty("voice", config["voice"])
-        engine.say(text)
-        engine.runAndWait()
-    except Exception as error:  # a broken audio device must never surface in Claude Code
-        common.log(f"speak failed: {error!r}")
-    finally:
-        common.release_speaker()
-
-
 # ---------- commands ----------
 
-def voiceover_command(args, session_id, config):
+def voiceover_command(args, session_id):
     words = args.lower().split()
     if words[:1] == ["global"]:
-        if words[1:2] in (["on"], ["off"]):
-            config["enabled"] = words[1] == "on"
-            common.save_config(config)
-        return f"Voice-over default for sessions is {'ON' if config['enabled'] else 'OFF'}."
+        on = core.set_global({"on": True, "off": False}.get(words[1]) if len(words) > 1 else None)
+        return f"Voice-over default for sessions is {'ON' if on else 'OFF'}."
 
     action = words[0] if words else "status"
-    if action not in ("on", "off", "toggle", "default", "status"):
+    if action not in core.SESSION_ACTIONS:
         return f"Unknown option '{action}'. Use: on, off, toggle, default, status, global on|off."
-    with common.sessions_locked() as sessions:
-        entry = common.touch_session(sessions, session_id)
-        if action in ("on", "off"):
-            entry["enabled"] = action == "on"
-        elif action == "toggle":
-            entry["enabled"] = not common.session_enabled(entry, config)
-        elif action == "default":
-            entry["enabled"] = None
-        on = common.session_enabled(entry, config)
-        following_default = entry["enabled"] is None
-    if not on:
-        common.stop_speaker(session_id)
-    note = " (following the global default)" if following_default else ""
-    problem = common.speaker_lock_problem() if on else None
+    status = core.set_session(session_id, action)
+    note = " (following the global default)" if status.following_default else ""
+    problem = status.speaker_problem
     warning = f" Nothing will be spoken until this is fixed: {problem}" if problem else ""
-    return f"Voice-over is {'ON' if on else 'OFF'} for this session{note}.{warning}"
+    return f"Voice-over is {'ON' if status.on else 'OFF'} for this session{note}.{warning}"
 
 
 def setup_command(args):
@@ -191,7 +133,7 @@ def handle_command(match, data):
         return SETUP_HINT
     if kind == "menubar":
         return menubar_ctl.command(args)
-    return voiceover_command(args, data.get("session_id") or "unknown", common.load_config())
+    return voiceover_command(args, data.get("session_id") or "unknown")
 
 
 def command_reply(message):
@@ -210,29 +152,15 @@ def command_reply(message):
 def on_stop(data):
     if data.get("stop_hook_active"):  # avoid re-speaking on forced continuations
         return
-    config = common.load_config()
-    session_id = data.get("session_id")
-    enabled = config["enabled"]
-    if session_id:
-        try:
-            with common.sessions_locked() as sessions:
-                enabled = common.session_enabled(
-                    common.touch_session(sessions, session_id, data.get("cwd")), config)
-        except common.LockTimeout as error:
-            common.log(f"sessions lock unavailable ({error}); using the global default")
-    if not enabled:
-        return
-
     text = data.get("last_assistant_message") or \
-        last_message_from_transcript(data.get("transcript_path", ""))
-    text = clean_for_speech(text or "", config["max_chars"], config["announce_code"])
-    if text:
-        speak(text, config, session_id)
+        (lambda: last_message_from_transcript(data.get("transcript_path", "")))  # read only if speaking
+    core.response_completed(data.get("session_id"), text, data.get("cwd"))
 
 
 def on_user_prompt(data):
     session_id = data.get("session_id")
-    common.stop_speaker(session_id)  # a new prompt interrupts this session's speech only
+    if session_id:  # without an id, None would mean "whichever session is speaking"
+        core.cancel_speech(session_id)  # a new prompt interrupts this session's speech only
     match = match_command(data.get("prompt"))
     if match:
         try:
@@ -242,21 +170,13 @@ def on_user_prompt(data):
             reason = f"Voice-over command failed: {error}. Details in {common.LOG_PATH}"
         print(json.dumps(command_reply(reason)))
     elif session_id:
-        try:
-            with common.sessions_locked() as sessions:
-                common.touch_session(sessions, session_id, data.get("cwd"))
-        except common.LockUnsafe as error:
-            common.log(f"session bookkeeping skipped: {error}")
-        except common.LockTimeout:
-            pass  # bookkeeping only; never delay the user's prompt for it
+        core.register(session_id, data.get("cwd"))
 
 
 def on_session_end(data):
     session_id = data.get("session_id")
     if session_id:
-        common.stop_speaker(session_id)
-        with common.sessions_locked() as sessions:
-            sessions.pop(session_id, None)
+        core.session_ended(session_id)
 
 
 HANDLERS = {"Stop": on_stop, "UserPromptSubmit": on_user_prompt, "SessionEnd": on_session_end}

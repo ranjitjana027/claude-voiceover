@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Internal: split the agent-neutral behaviour (`scripts/core.py`, `scripts/speech.py`) out of the Claude Code hook adapter, as groundwork for Codex support (#6). No behaviour change.
+- Fix: a prompt event without a session id no longer stops another session's speech.
+
 ## 0.2.2
 
 - Fix: on Linux with `COLUMNS` set, a long command line was cut off by `ps`, so a new prompt failed to stop

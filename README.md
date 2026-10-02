@@ -167,7 +167,9 @@ which dispatches on `hook_event_name`:
 
 | File | Role |
 |---|---|
-| `scripts/voiceover.py` | Hook dispatcher, command handling, text cleaning, speaker process |
+| `scripts/voiceover.py` | Claude Code adapter: hook dispatcher, transcript fallback, `/voiceover` commands, reply format |
+| `scripts/core.py` | Agent-neutral session lifecycle and controls, keyed by session |
+| `scripts/speech.py` | Markdown cleaning and pyttsx3 speaking, one speaker at a time |
 | `scripts/common.py` | Paths, config, locking, safe process signalling |
 | `scripts/setup.py` | Creates the private virtualenv with pinned dependencies |
 | `scripts/menubar.py`, `scripts/menubar_ctl.py` | macOS menu bar app and its LaunchAgent control |
