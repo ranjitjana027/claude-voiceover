@@ -42,7 +42,7 @@ def speak(text, config, session_id=None):
     try:
         import pyttsx3
     except ImportError:
-        common.log("pyttsx3 missing; run /voiceover-setup")
+        common.log("pyttsx3 missing; voice-over setup has not finished (see setup.log)")
         return
     try:
         common.claim_speaker(session_id)  # one voice at a time across all sessions
