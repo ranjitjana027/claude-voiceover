@@ -1,6 +1,6 @@
 {
   "name": "agent-voiceover",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Reads Claude's final response aloud, fully locally (pyttsx3, no API keys). Per-session on/off and a macOS menu bar app.",
   "author": {
     "name": "Ranjit Jana",
