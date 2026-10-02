@@ -208,3 +208,11 @@ def test_muted_session_does_not_read_the_transcript(monkeypatch, capsys, spoken)
     monkeypatch.setattr(voiceover, "last_message_from_transcript", lambda path: pytest.fail("transcript read"))
     run_hook(monkeypatch, capsys, {"hook_event_name": "Stop", "session_id": "A", "transcript_path": "/t.jsonl"})
     assert spoken == []
+
+
+@pytest.mark.parametrize("session_id", [None, ""])
+def test_prompt_without_session_id_does_not_stop_other_sessions(monkeypatch, capsys, session_id):
+    stopped = []
+    monkeypatch.setattr(common, "stop_speaker", lambda sid=None: stopped.append(sid))
+    run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": session_id, "prompt": "hi"})
+    assert stopped == []

@@ -159,7 +159,8 @@ def on_stop(data):
 
 def on_user_prompt(data):
     session_id = data.get("session_id")
-    core.cancel_speech(session_id)  # this session's speech only (any session's if the payload has no id)
+    if session_id:  # without an id, None would mean "whichever session is speaking"
+        core.cancel_speech(session_id)  # a new prompt interrupts this session's speech only
     match = match_command(data.get("prompt"))
     if match:
         try:
