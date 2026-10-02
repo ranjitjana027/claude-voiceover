@@ -23,5 +23,8 @@
         "accessibility"
       ]
     }
-  ]
+  ],
+  "renames": {
+    "claude-voiceover": "agent-voiceover"
+  }
 }

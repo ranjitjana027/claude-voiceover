@@ -66,6 +66,15 @@ def test_plugin_name_is_not_reserved():
     assert name not in ("claude", "anthropic", "anthropics", "claude-code", "claude-mods")
 
 
+def test_marketplace_maps_the_old_plugin_name_to_the_new_one():
+    # lets Claude Code move existing claude-voiceover installs over on its own
+    with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+        name = json.load(f)["name"]
+    with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json"), encoding="utf-8") as f:
+        renames = json.load(f).get("renames", {})
+    assert renames == {"claude-voiceover": name}
+
+
 def test_installer_installs_the_manifest_plugin_id():
     with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
         name = json.load(f)["name"]

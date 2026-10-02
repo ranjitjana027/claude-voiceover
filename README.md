@@ -150,14 +150,17 @@ file is a symlink), or `<settings file>.bak-voiceover.<random>` if that name is 
 ### Coming from `claude-voiceover`
 
 The plugin was renamed to `agent-voiceover`, because Claude Code reserves plugin names starting with `claude-`.
-Re-run the installer, or by hand: refresh the marketplace, install the new id, then remove the old one
-(keeping both speaks every response twice):
+The marketplace maps the old name to the new one, so once it refreshes Claude Code switches your install's
+setting over to `agent-voiceover` and stops loading the old one. Install the new id to finish (re-running the
+installer does all of this):
 
 ```text
 /plugin marketplace update claude-voiceover
 /plugin install agent-voiceover@claude-voiceover
-/plugin uninstall claude-voiceover@claude-voiceover
 ```
+
+If `/plugin` still lists `claude-voiceover@claude-voiceover` as installed, uninstall it: keeping both speaks
+every response twice.
 
 Restart Claude Code. If you use the menu bar login item, run `/voiceover-menubar enable` once afterwards: the
 old login copy would otherwise treat the renamed plugin as uninstalled and remove itself. Your settings in
