@@ -10,7 +10,7 @@
       "name": "agent-voiceover",
       "source": "./",
       "description": "Reads Claude's final response aloud, fully locally, with per-session on/off and a macOS menu bar app.",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "author": {
         "name": "Ranjit Jana"
       },

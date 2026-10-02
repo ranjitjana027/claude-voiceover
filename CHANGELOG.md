@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.0
 
 - **Renamed the plugin to `agent-voiceover`** (was `claude-voiceover`): Claude Code now reserves plugin names
   starting with `claude-`. The plugin id is `agent-voiceover@claude-voiceover`; the marketplace keeps its name.
