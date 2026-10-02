@@ -3,7 +3,7 @@ description: Voice-over for this session - on, off, toggle, default, status, or 
 argument-hint: on | off | toggle | default | status | global on|off
 disable-model-invocation: true
 ---
-If a claude-voiceover message accompanies this command, the hook already applied it:
+If an agent-voiceover message accompanies this command, the hook already applied it:
 reply with that message, word for word, and nothing else. Do not run any tools.
 
 With no such message, the hook did not run (plugin hooks disabled, CLAUDE_VOICEOVER=0,

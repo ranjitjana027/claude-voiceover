@@ -68,7 +68,9 @@ def test_clean_for_speech_no_limit():
 
 @pytest.mark.parametrize("text, kind, args", [
     ("/voiceover off", None, "off"),
-    ("/claude-voiceover:voiceover on", None, "on"),
+    ("/agent-voiceover:voiceover on", None, "on"),
+    ("/claude-voiceover:voiceover on", None, "on"),  # the plugin's name before the rename
+    ("/agent-voiceover:voiceover-menubar status", "menubar", "status"),
     ("/voiceover", None, None),
     ("  /voiceover-menubar enable  ", "menubar", "enable"),
     ("/claude-voiceover:voiceover-setup status", "setup", "status"),
@@ -79,7 +81,7 @@ def test_command_regex_matches(text, kind, args):
 
 
 @pytest.mark.parametrize("text", [
-    "please fix /voiceover off", "/voiceovers", "voiceover off", "/voice off",
+    "please fix /voiceover off", "/voiceovers", "voiceover off", "/voice off", "/other-voiceover:voiceover on",
     "/voiceover off\nalso refactor the auth module",  # regression: extra lines were swallowed
 ])
 def test_command_regex_ignores_other_prompts(text):

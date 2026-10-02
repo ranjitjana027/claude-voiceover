@@ -3,7 +3,7 @@ description: One-time voice-over setup (installs the local speech engine); also 
 argument-hint: "[status | uninstall]"
 disable-model-invocation: true
 ---
-If a claude-voiceover message accompanies this command, the hook already applied it:
+If an agent-voiceover message accompanies this command, the hook already applied it:
 reply with that message, word for word, and nothing else. Do not run any tools.
 
 With no such message, the hook did not run. Most likely Claude Code has not been

@@ -1,4 +1,4 @@
-# claude-voiceover
+# agent-voiceover
 
 A Claude Code plugin that speaks Claude's final response aloud, locally with pyttsx3. See README.md for the
 user-facing behaviour and CONTRIBUTING.md for contribution rules; both are authoritative.

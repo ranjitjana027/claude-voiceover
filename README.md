@@ -1,4 +1,4 @@
-# claude-voiceover
+# agent-voiceover
 
 [![Tests](https://github.com/ranjitjana027/claude-voiceover/actions/workflows/tests.yml/badge.svg)](https://github.com/ranjitjana027/claude-voiceover/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -48,7 +48,7 @@ Then restart Claude Code.
 
 ```text
 /plugin marketplace add ranjitjana027/claude-voiceover    # or a local clone: ~/Documents/claude-voiceover
-/plugin install claude-voiceover@claude-voiceover
+/plugin install agent-voiceover@claude-voiceover
 ```
 
 1. Restart Claude Code so the plugin's hooks load.
@@ -68,7 +68,7 @@ You also need Claude Code and Python 3.9+ on your `PATH` as `python3`.
 ## Commands
 
 The plugin's hook applies these commands itself, before the model runs; Claude only repeats the
-result as its reply (one short, tool-free turn). Each also works fully qualified, for example `/claude-voiceover:voiceover off`.
+result as its reply (one short, tool-free turn). Each also works fully qualified, for example `/agent-voiceover:voiceover off`.
 
 | Command | What it does |
 |---|---|
@@ -147,11 +147,27 @@ file is a symlink), or `<settings file>.bak-voiceover.<random>` if that name is 
   longer goes to Claude untouched. A failed command still reports why.
 - **Quiet elsewhere.** On Windows it's a silent no-op. Set `CLAUDE_VOICEOVER=0` to turn everything off.
 
+### Coming from `claude-voiceover`
+
+The plugin was renamed to `agent-voiceover`, because Claude Code reserves plugin names starting with `claude-`.
+Re-run the installer, or by hand: refresh the marketplace, install the new id, then remove the old one
+(keeping both speaks every response twice):
+
+```text
+/plugin marketplace update claude-voiceover
+/plugin install agent-voiceover@claude-voiceover
+/plugin uninstall claude-voiceover@claude-voiceover
+```
+
+Restart Claude Code. If you use the menu bar login item, run `/voiceover-menubar enable` once afterwards: the
+old login copy would otherwise treat the renamed plugin as uninstalled and remove itself. Your settings in
+`~/.claude/voiceover/` are kept.
+
 ## Uninstall
 
 ```text
 /voiceover-setup uninstall
-/plugin uninstall claude-voiceover@claude-voiceover
+/plugin uninstall agent-voiceover@claude-voiceover
 ```
 
 Then delete `~/.claude/voiceover/`.
@@ -183,7 +199,7 @@ claude plugin validate .
 ```
 
 To try your changes in Claude Code, install from your clone:
-`claude plugin marketplace add ./ && claude plugin install claude-voiceover@claude-voiceover`, then restart Claude Code.
+`claude plugin marketplace add ./ && claude plugin install agent-voiceover@claude-voiceover`, then restart Claude Code.
 
 ## Contributing
 

@@ -1,6 +1,6 @@
 # Security Policy
 
-claude-voiceover runs as a Claude Code hook on every prompt, starts background processes, and on macOS can
+agent-voiceover runs as a Claude Code hook on every prompt, starts background processes, and on macOS can
 register a login item, so security reports are taken seriously.
 
 ## Reporting a vulnerability
@@ -14,7 +14,7 @@ prefer otherwise.
 
 ## Supported versions
 
-Only the latest release gets security fixes. Update with `claude plugin update claude-voiceover@claude-voiceover`
+Only the latest release gets security fixes. Update with `claude plugin update agent-voiceover@claude-voiceover`
 (or re-run `scripts/install.sh`).
 
 ## Scope
