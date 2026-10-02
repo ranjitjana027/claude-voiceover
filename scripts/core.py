@@ -5,8 +5,9 @@ command syntax and output format, and call these with a session key and plain te
 here reads a hook payload or a transcript.
 
 Errors: register and response_completed never raise on a busy or unsafe sessions lock (they
-log or fall back). session_ended, set_session and set_global let LockTimeout/LockUnsafe and
-OSError through; the adapter decides how to report them.
+log or fall back). session_ended and set_session let LockTimeout/LockUnsafe and OSError
+through; set_global takes no lock and can only raise OSError when saving the config. The
+adapter decides how to report them.
 
 Standard library only at import time.
 """
