@@ -37,7 +37,8 @@ def clean_for_speech(text, max_chars=common.DEFAULTS["max_chars"], announce_code
 
 def speak(text, config, session_id=None):
     """Speak `text` in this process until done, after stopping whatever session is speaking.
-    Never raises: a missing pyttsx3, busy speaker lock or audio failure is only logged."""
+    A missing pyttsx3, a busy or unsafe speaker lock, or an audio failure is only logged;
+    filesystem errors (OSError) from the speaker lock and pid file still propagate."""
     try:
         import pyttsx3
     except ImportError:
