@@ -400,3 +400,11 @@ def test_no_speaker_warning_when_voiceover_is_off(tmp_path, monkeypatch, capsys)
     reply = run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": "A",
                                            "prompt": "/voiceover off"})
     assert reply["reason"] == "Voice-over is OFF for this session."
+
+
+@pytest.mark.parametrize("name, installed", [("agent-voiceover", True), ("claude-voiceover", True), ("other", False)])
+def test_login_copy_recognises_the_plugin_under_either_name(menubar_module, tmp_path, monkeypatch, name, installed):
+    menubar, _ = menubar_module
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude" / "plugins" / "cache" / "claude-voiceover" / name).mkdir(parents=True)
+    assert menubar.plugin_installed() is installed

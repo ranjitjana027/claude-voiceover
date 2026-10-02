@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ## Unreleased
 
+- **Renamed the plugin to `agent-voiceover`** (was `claude-voiceover`): Claude Code now reserves plugin names
+  starting with `claude-`. The plugin id is `agent-voiceover@claude-voiceover`; the marketplace keeps its name.
+  The marketplace's `renames` entry maps the old name to the new one, so after a marketplace refresh Claude Code
+  switches the old install's setting to the new id. To finish, re-run `scripts/install.sh`, or by hand:
+  `claude plugin marketplace update claude-voiceover`, `claude plugin install agent-voiceover@claude-voiceover`,
+  and `/voiceover-menubar enable` if you use the menu bar login item. If the old id is still listed as installed,
+  uninstall it (`claude plugin uninstall claude-voiceover@claude-voiceover`): keeping both speaks every response twice.
+  Settings, sessions and the speech engine in `~/.claude/voiceover/` are kept, and `/voiceover` is unchanged;
+  the qualified form is now `/agent-voiceover:voiceover` (the old `/claude-voiceover:voiceover` still works).
+- The installer refreshes an existing menu bar login item, so its private copy matches the installed version.
 - Internal: split the agent-neutral behaviour (`scripts/core.py`, `scripts/speech.py`) out of the Claude Code hook adapter, as groundwork for Codex support (#6). No behaviour change.
 - Fix: a prompt event without a session id no longer stops another session's speech.
 

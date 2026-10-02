@@ -1,4 +1,4 @@
-# Installing claude-voiceover (guide for Claude Code)
+# Installing agent-voiceover (guide for Claude Code)
 
 You are Claude Code, and the user has asked you to install this plugin. Follow these steps in order.
 Everything goes through `scripts/install.sh`, which is idempotent, so re-running it is always safe.
@@ -101,6 +101,7 @@ from Claude Code's plugin cache, not from the clone.
 | Setup `FAILED:` line mentions pip | Network or proxy issue; re-run the installer once it's fixed |
 | No sound after restart | `/voiceover status`; then check `~/.claude/voiceover/voiceover.log` |
 | Commands reach the model instead of applying instantly | Claude Code wasn't restarted after install |
+| Every response is spoken twice | The old id is still installed: `claude plugin uninstall claude-voiceover@claude-voiceover` (add `--scope project` if the installer said so) |
 
-Uninstall: `/voiceover-setup uninstall`, then `claude plugin uninstall claude-voiceover@claude-voiceover`, then
+Uninstall: `/voiceover-setup uninstall`, then `claude plugin uninstall agent-voiceover@claude-voiceover`, then
 `rm -rf ~/.claude/voiceover`.

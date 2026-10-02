@@ -1,4 +1,4 @@
-# Contributing to claude-voiceover
+# Contributing to agent-voiceover
 
 Thanks for helping out! Bug reports, fixes, docs improvements and ideas are all welcome.
 
@@ -26,7 +26,7 @@ To run your working copy inside Claude Code:
 
 ```bash
 claude plugin marketplace add ./
-claude plugin install claude-voiceover@claude-voiceover
+claude plugin install agent-voiceover@claude-voiceover
 ```
 
 Restart Claude Code after each change to hooks or commands. The runtime state lives in `~/.claude/voiceover/`;

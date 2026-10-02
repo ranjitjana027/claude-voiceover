@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-voiceover hook entrypoint for Claude Code (Stop, UserPromptSubmit, SessionEnd).
+agent-voiceover hook entrypoint for Claude Code (Stop, UserPromptSubmit, SessionEnd).
 
   Stop              speak Claude's final response if voice-over is on for this session
   UserPromptSubmit  stop this session's speech; handle the plugin's slash commands
@@ -35,9 +35,10 @@ import menubar_ctl  # noqa: E402
 from speech import clean_for_speech, speak  # noqa: E402,F401
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
-# Plugin commands can be typed bare (/voiceover) or qualified (/claude-voiceover:voiceover).
-COMMAND = re.compile(r"/(?:claude-voiceover:)?voiceover(?:-(menubar|setup))?(?:[ \t]+([^\n]*?))?[ \t]*", re.I)
-REPLY_PREFIX = ("The claude-voiceover hook already handled this command. Reply with exactly the "
+# Plugin commands can be typed bare (/voiceover) or qualified (/agent-voiceover:voiceover, or
+# /claude-voiceover:voiceover from before the plugin was renamed).
+COMMAND = re.compile(r"/(?:(?:agent|claude)-voiceover:)?voiceover(?:-(menubar|setup))?(?:[ \t]+([^\n]*?))?[ \t]*", re.I)
+REPLY_PREFIX = ("The agent-voiceover hook already handled this command. Reply with exactly the "
                 "message below, word for word, and nothing else. Do not run any tools.\n\n")
 SETUP_HINT = "Voice-over isn't set up yet. Run /voiceover-setup once (about a minute), then restart Claude Code."
 
@@ -95,7 +96,7 @@ def setup_command(args):
         return setup_status()
     if action == "uninstall":
         removed = menubar_ctl.disable() if sys.platform == "darwin" else "No login item on this platform."
-        return (f"{removed} To finish: /plugin uninstall claude-voiceover, then delete {common.DATA_DIR}")
+        return (f"{removed} To finish: /plugin uninstall agent-voiceover@claude-voiceover, then delete {common.DATA_DIR}")
     if action != "install":
         return "Unknown option. Use: /voiceover-setup, /voiceover-setup status, /voiceover-setup uninstall."
     try:

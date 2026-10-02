@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-voiceover menu bar app (macOS). Start it with /voiceover-menubar start|enable.
+agent-voiceover menu bar app (macOS). Start it with /voiceover-menubar start|enable.
 
 Global settings go to config.json and per-session on/off to sessions.json in the
 data dir; the hook re-reads both on each turn, so changes apply from the next response.
@@ -48,7 +48,9 @@ def is_speaking():
 
 
 def plugin_installed():
-    return bool(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/claude-voiceover")))
+    # claude-voiceover: the plugin's name before it was renamed
+    return any(glob.glob(os.path.expanduser(f"~/.claude/plugins/cache/*/{name}"))
+               for name in ("agent-voiceover", "claude-voiceover"))
 
 
 def remove_orphaned_login_item():

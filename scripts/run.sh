@@ -1,5 +1,5 @@
 #!/bin/sh
-# Hook entrypoint for every claude-voiceover event. Exits 0 no matter what:
+# Hook entrypoint for every agent-voiceover event. Exits 0 no matter what:
 # voice-over must never break a Claude Code session.
 
 [ "${CLAUDE_VOICEOVER:-1}" = "0" ] && exit 0

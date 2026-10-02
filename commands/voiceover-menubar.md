@@ -3,7 +3,7 @@ description: macOS menu bar app for voice-over - start, stop, enable (start at l
 argument-hint: start | stop | enable | disable | status
 disable-model-invocation: true
 ---
-If a claude-voiceover message accompanies this command, the hook already applied it:
+If an agent-voiceover message accompanies this command, the hook already applied it:
 reply with that message, word for word, and nothing else. Do not run any tools.
 
 With no such message, the hook did not run (plugin hooks disabled, CLAUDE_VOICEOVER=0,

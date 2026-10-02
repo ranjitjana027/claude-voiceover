@@ -1,4 +1,4 @@
-"""Shared state for claude-voiceover: paths, global config, per-session flags, process tracking.
+"""Shared state for agent-voiceover: paths, global config, per-session flags, process tracking.
 
 Standard library only: the hook must run before /voiceover-setup has installed anything.
 State lives outside the plugin directory because Claude Code replaces that
