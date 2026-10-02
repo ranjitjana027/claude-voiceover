@@ -6,13 +6,14 @@ import time
 import pytest
 
 import common
+import speech
 import voiceover
 
 
 @pytest.fixture
 def spoken(monkeypatch):
     calls = []
-    monkeypatch.setattr(voiceover, "speak", lambda text, config, session_id=None: calls.append((text, session_id)))
+    monkeypatch.setattr(speech, "speak", lambda text, config, session_id=None: calls.append((text, session_id)))
     return calls
 
 
@@ -196,3 +197,24 @@ def test_command_reply_is_relayed_without_hook_prefix(monkeypatch, capsys, spoke
     assert not {"continue", "stopReason", "decision"} & reply.keys()
     assert reply["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert reply["reason"] == "Voice-over is ON for this session."
+
+
+@pytest.mark.parametrize("text", ["/voiceover global", "/voiceover global maybe"])
+def test_global_without_on_or_off_only_reports(monkeypatch, capsys, text):
+    assert run_hook(monkeypatch, capsys, prompt("A", text))["reason"] == "Voice-over default for sessions is ON."
+    assert not os.path.exists(common.CONFIG_PATH)
+
+
+def test_muted_session_does_not_read_the_transcript(monkeypatch, capsys, spoken):
+    run_hook(monkeypatch, capsys, prompt("A", "/voiceover off"))
+    monkeypatch.setattr(voiceover, "last_message_from_transcript", lambda path: pytest.fail("transcript read"))
+    run_hook(monkeypatch, capsys, {"hook_event_name": "Stop", "session_id": "A", "transcript_path": "/t.jsonl"})
+    assert spoken == []
+
+
+@pytest.mark.parametrize("session_id", [None, ""])
+def test_prompt_without_session_id_does_not_stop_other_sessions(monkeypatch, capsys, session_id):
+    stopped = []
+    monkeypatch.setattr(common, "stop_speaker", lambda sid=None: stopped.append(sid))
+    run_hook(monkeypatch, capsys, {"hook_event_name": "UserPromptSubmit", "session_id": session_id, "prompt": "hi"})
+    assert stopped == []

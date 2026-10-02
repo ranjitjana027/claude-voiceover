@@ -16,7 +16,9 @@ Run both before every commit. CI (`.github/workflows/tests.yml`) runs pytest on 
 ## Layout
 
 - `hooks/hooks.json`: UserPromptSubmit, Stop (async) and SessionEnd all run `scripts/run.sh` → `scripts/voiceover.py`.
-- `scripts/voiceover.py`: hook dispatcher, `/voiceover` command handling, text cleaning, speaker process.
+- `scripts/voiceover.py`: Claude Code adapter: hook payload parsing, transcript fallback, `/voiceover` commands, reply format.
+- `scripts/core.py`: agent-neutral session lifecycle and controls, keyed by session; never reads a hook payload.
+- `scripts/speech.py`: Markdown cleaning and pyttsx3 speaking (one speaker at a time, via `speaker.lock`).
 - `scripts/common.py`: paths under `~/.claude/voiceover/`, config, locks, safe process signalling.
 - `scripts/setup.py`: private venv with pinned deps. `scripts/menubar*.py`: macOS menu bar app and LaunchAgent.
 - `scripts/install.sh`, `scripts/legacy.py`: installer and cleanup of the pre-plugin `claude_speak*` setup.

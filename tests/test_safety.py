@@ -13,6 +13,7 @@ import pytest
 
 import common
 import menubar_ctl
+import speech
 import voiceover
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
@@ -266,7 +267,7 @@ def test_lock_file_symlink_is_not_followed(tmp_path):
 
 def test_symlinked_sessions_lock_still_speaks_with_global_default(tmp_path, monkeypatch, capsys):
     spoken = []
-    monkeypatch.setattr(voiceover, "speak", lambda text, config, session_id=None: spoken.append(text))
+    monkeypatch.setattr(speech, "speak", lambda text, config, session_id=None: spoken.append(text))
     os.symlink(tmp_path / "nowhere", os.path.join(common.DATA_DIR, "sessions.lock"))
     run_hook(monkeypatch, capsys, {"hook_event_name": "Stop", "session_id": "A", "last_assistant_message": "hello"})
     assert spoken == ["hello"]
